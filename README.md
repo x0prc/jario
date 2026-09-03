@@ -4,7 +4,7 @@ data and memory containerisation for models
 
 ## features
 
-- **S3-compatible API** — bucket ops, object ops, multipart uploads, SigV4 auth
+- **S3-compatible API** — bucket ops, object ops, SigV4 auth (multipart deferred to Task 8)
 - **single-node or distributed** — same binary, zero config for dev, Raft for clusters
 - **plain replication** — no erasure coding knobs, no healing daemons, no KES
 - **content-addressed blobs** — deduplication free, idempotent writes
@@ -26,5 +26,5 @@ go test ./...
 ```
 
 - `internal/store` — bucket CRUD, object CRUD, prefix listing
-- `internal/api` — S3 XML responses, auth stub, routing
+- `internal/api` — bucket ops, S3 XML errors, routing (object ops stubs)
 - `internal/raft` — apply, snapshot, FSM
