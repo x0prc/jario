@@ -1,11 +1,14 @@
 // Package api implements the S3-compatible HTTP handler.
-// Routes bucket ops, object ops, and multipart upload lifecycle
-// to the store layer. SigV4 auth at the middleware level.
+// Routes bucket ops, object ops, and (later) multipart uploads
+// to the store layer, behind SigV4 auth.
 package api
 
 import (
+	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/c0ldheat/jario/internal/store"
 )
@@ -17,14 +20,23 @@ type Handler struct {
 	secretKey string
 }
 
-// NewHandler creates an S3 handler. auth is stubbed —
-// full SigV4 arrives with Task 4.
+// NewHandler creates an S3 handler with the given credentials.
 func NewHandler(st *store.Store, accessKey, secretKey string) http.Handler {
 	return &Handler{st: st, accessKey: accessKey, secretKey: secretKey}
 }
 
-// ServeHTTP dispatches S3 requests by path and method.
+// ServeHTTP authenticates, then routes the request.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !h.verifySigV4(r) {
+		h.s3Error(w, "AccessDenied", "access denied")
+		return
+	}
+	h.route(w, r)
+}
+
+// route dispatches by path shape: / → buckets, /{bucket} → bucket ops,
+// /{bucket}/{key} → object ops.
+func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/")
 
 	if path == "" && r.Method == http.MethodGet {
@@ -34,42 +46,124 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	parts := strings.SplitN(path, "/", 2)
 	bucket := parts[0]
-	key := ""
-	if len(parts) > 1 {
-		key = parts[1]
-	}
-
-	if key == "" {
+	if len(parts) == 1 {
 		h.handleBucket(w, r, bucket)
 	} else {
-		h.handleObject(w, r, bucket, key)
+		h.handleObject(w, r, bucket, parts[1])
 	}
 }
+
+// --- bucket ops ---
 
 func (h *Handler) handleBucket(w http.ResponseWriter, r *http.Request, bucket string) {
 	switch r.Method {
 	case http.MethodPut:
 		if err := h.st.CreateBucket(bucket); err != nil {
-			h.s3Error(w, "BucketAlreadyExists", err.Error())
+			h.storeError(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 	case http.MethodDelete:
 		if err := h.st.DeleteBucket(bucket); err != nil {
-			h.s3Error(w, "NoSuchBucket", err.Error())
+			h.storeError(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case http.MethodGet:
+		h.listObjectsV2(w, r, bucket)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
-func (h *Handler) handleObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	// object ops in Task 3
-	w.WriteHeader(http.StatusNotImplemented)
+func (h *Handler) listBuckets(w http.ResponseWriter, r *http.Request) {
+	res := listBucketsResult{Xmlns: s3xmlns}
+	for _, b := range h.st.ListBuckets() {
+		res.Buckets = append(res.Buckets, bucketEntry{
+			Name:         b.Name,
+			CreationDate: b.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	writeXML(w, res)
 }
 
-func (h *Handler) listBuckets(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+// listObjectsV2 handles GET /{bucket}?list-type=2.
+// ponytail: no pagination — MaxKeys and continuation-token are ignored,
+// IsTruncated is always false. Fine until a bucket exceeds ~1000 keys.
+func (h *Handler) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) {
+	prefix := r.URL.Query().Get("prefix")
+	objects := h.st.ListObjects(bucket, prefix)
+	res := listBucketResult{
+		Xmlns:    s3xmlns,
+		Name:     bucket,
+		Prefix:   prefix,
+		MaxKeys:  1000,
+		KeyCount: len(objects),
+	}
+	for _, o := range objects {
+		res.Contents = append(res.Contents, objectEntry{
+			Key:          o.Key,
+			LastModified: o.CreatedAt.Format(time.RFC3339),
+			ETag:         `"` + o.ETag + `"`,
+			Size:         o.Size,
+			StorageClass: "STANDARD",
+		})
+	}
+	writeXML(w, res)
+}
+
+// --- object ops ---
+
+func (h *Handler) handleObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	switch r.Method {
+	case http.MethodPut:
+		h.putObject(w, r, bucket, key)
+	case http.MethodGet:
+		h.getObject(w, r, bucket, key)
+	case http.MethodHead:
+		h.headObject(w, r, bucket, key)
+	case http.MethodDelete:
+		h.deleteObject(w, r, bucket, key)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Handler) putObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	etag, err := h.st.PutObject(bucket, key, r.Body)
+	if err != nil {
+		h.storeError(w, err)
+		return
+	}
+	w.Header().Set("ETag", `"`+etag+`"`)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	rc, meta, err := h.st.GetObject(bucket, key)
+	if err != nil {
+		h.storeError(w, err)
+		return
+	}
+	defer rc.Close()
+	w.Header().Set("ETag", `"`+meta.ETag+`"`)
+	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	io.Copy(w, rc)
+}
+
+func (h *Handler) headObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	meta, err := h.st.GetMeta(bucket, key)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	w.Header().Set("ETag", `"`+meta.ETag+`"`)
+	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) deleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	// S3 semantics: DELETE is idempotent — 204 even if the key never existed.
+	h.st.DeleteObject(bucket, key)
+	w.WriteHeader(http.StatusNoContent)
 }

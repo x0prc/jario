@@ -71,6 +71,14 @@ func TestPutGetObject(t *testing.T) {
 	}
 }
 
+func TestPutObjectNoBucket(t *testing.T) {
+	s := New(t.TempDir())
+	_, err := s.PutObject("no-bucket", "hello.txt", strings.NewReader("hello"))
+	if !errors.Is(err, ErrNoBucket) {
+		t.Fatalf("expected ErrNoBucket, got %v", err)
+	}
+}
+
 func TestGetObjectNonexistent(t *testing.T) {
 	s := New(t.TempDir())
 	s.CreateBucket("test-bucket")

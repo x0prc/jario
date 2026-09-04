@@ -73,13 +73,16 @@ func (m *metaStore) listBuckets() []Bucket {
 	return out
 }
 
-func (m *metaStore) putObject(bucket, key string, meta ObjectMeta) {
+// putObject registers object metadata. ErrNoBucket if the bucket
+// doesn't exist — objects can never outlive their bucket.
+func (m *metaStore) putObject(bucket, key string, meta ObjectMeta) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.objects[bucket]; !ok {
-		m.objects[bucket] = make(map[string]*ObjectMeta)
+	if _, ok := m.buckets[bucket]; !ok {
+		return ErrNoBucket
 	}
 	m.objects[bucket][key] = &meta
+	return nil
 }
 
 func (m *metaStore) getObject(bucket, key string) (*ObjectMeta, error) {
