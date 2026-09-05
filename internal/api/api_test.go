@@ -16,12 +16,10 @@ func testHandler(t *testing.T) *Handler {
 	return NewHandler(st, "testkey", "testsecret").(*Handler)
 }
 
-// authReq builds a request carrying a stub SigV4 header for testkey.
-// Real signature verification is Task 4; the stub checks the access key only.
+// authReq builds a request signed with valid test credentials.
 func authReq(method, path string, body io.Reader) *http.Request {
 	req := httptest.NewRequest(method, path, body)
-	req.Header.Set("Authorization",
-		"AWS4-HMAC-SHA256 Credential=testkey/20240101/us-east-1/s3/aws4_request,SignedHeaders=host,Signature=stub")
+	signRequest(req, "testkey", "testsecret")
 	return req
 }
 
