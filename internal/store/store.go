@@ -24,31 +24,30 @@ var (
 // Store is the storage engine. Owns blob dir and metadata index.
 type Store struct {
 	dataDir string
-	meta    *metaStore
+	meta    *MetaStore
 }
 
 // New creates a Store rooted at dataDir. Creates blobs/ subdirectory.
 func New(dataDir string) *Store {
 	os.MkdirAll(filepath.Join(dataDir, "blobs"), 0755)
-	return &Store{dataDir: dataDir, meta: newMetaStore()}
+	return &Store{dataDir: dataDir, meta: NewMetaStore()}
 }
 
 // --- Bucket operations ---
 
 // CreateBucket adds a bucket. ErrBucketExists on duplicate.
 func (s *Store) CreateBucket(name string) error {
-	return s.meta.createBucket(name)
+	return s.meta.CreateBucket(name)
 }
 
 // DeleteBucket removes a bucket and all its object metadata.
-// Blob cleanup is handled separately by the content-addressed layer.
 func (s *Store) DeleteBucket(name string) error {
-	return s.meta.deleteBucket(name)
+	return s.meta.DeleteBucket(name)
 }
 
 // ListBuckets returns all buckets, unordered.
 func (s *Store) ListBuckets() []Bucket {
-	return s.meta.listBuckets()
+	return s.meta.ListBuckets()
 }
 
 // --- Object operations ---
@@ -68,7 +67,7 @@ func (s *Store) PutObject(bucket, key string, body io.Reader) (string, error) {
 		return "", fmt.Errorf("write blob: %w", err)
 	}
 
-	err = s.meta.putObject(bucket, key, ObjectMeta{
+	s.meta.PutObject(bucket, key, ObjectMeta{
 		Key:       key,
 		Size:      int64(len(data)),
 		ETag:      shaHex,
@@ -83,7 +82,7 @@ func (s *Store) PutObject(bucket, key string, body io.Reader) (string, error) {
 
 // GetObject returns reader and metadata for key in bucket.
 func (s *Store) GetObject(bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
-	meta, err := s.meta.getObject(bucket, key)
+	meta, err := s.meta.GetObject(bucket, key)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -97,24 +96,23 @@ func (s *Store) GetObject(bucket, key string) (io.ReadCloser, *ObjectMeta, error
 // DeleteObject removes object metadata and its blob.
 // Blob deletion is idempotent — safe to call twice.
 func (s *Store) DeleteObject(bucket, key string) error {
-	meta, err := s.meta.getObject(bucket, key)
+	meta, err := s.meta.GetObject(bucket, key)
 	if err != nil {
 		return err
 	}
 	os.Remove(s.blobPath(meta.Sha256))
-	s.meta.deleteObject(bucket, key)
+	s.meta.DeleteObject(bucket, key)
 	return nil
 }
 
 // GetMeta returns object metadata without opening the blob.
 func (s *Store) GetMeta(bucket, key string) (*ObjectMeta, error) {
-	return s.meta.getObject(bucket, key)
+	return s.meta.GetObject(bucket, key)
 }
 
 // ListObjects returns metadata for all objects in bucket matching prefix.
-// Empty prefix returns all objects. Ordered by key, for S3 compatibility.
 func (s *Store) ListObjects(bucket, prefix string) []ObjectMeta {
-	return s.meta.listObjects(bucket, prefix)
+	return s.meta.ListObjects(bucket, prefix)
 }
 
 // --- helpers ---

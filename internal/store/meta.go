@@ -1,6 +1,8 @@
 package store
 
 import (
+	"encoding/json"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -24,24 +26,23 @@ type ObjectMeta struct {
 	VersionID   string
 }
 
-// metaStore holds all bucket and object metadata.
+// MetaStore holds all bucket and object metadata.
 // All mutations require a write lock; reads use RLock.
-// structs, pointers, slices that satisfy the invariant
-// "maps are never nil after init, mutex is never copied after init".
-type metaStore struct {
+type MetaStore struct {
 	mu      sync.RWMutex
 	buckets map[string]*Bucket
 	objects map[string]map[string]*ObjectMeta // bucket → key → meta
 }
 
-func newMetaStore() *metaStore {
-	return &metaStore{
+func NewMetaStore() *MetaStore {
+	return &MetaStore{
 		buckets: make(map[string]*Bucket),
 		objects: make(map[string]map[string]*ObjectMeta),
 	}
 }
 
-func (m *metaStore) createBucket(name string) error {
+// CreateBucket adds a bucket. ErrBucketExists on duplicate.
+func (m *MetaStore) CreateBucket(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.buckets[name]; ok {
@@ -52,7 +53,8 @@ func (m *metaStore) createBucket(name string) error {
 	return nil
 }
 
-func (m *metaStore) deleteBucket(name string) error {
+// DeleteBucket removes a bucket and all its object metadata.
+func (m *MetaStore) DeleteBucket(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.buckets[name]; !ok {
@@ -63,7 +65,8 @@ func (m *metaStore) deleteBucket(name string) error {
 	return nil
 }
 
-func (m *metaStore) listBuckets() []Bucket {
+// ListBuckets returns all buckets, unordered.
+func (m *MetaStore) ListBuckets() []Bucket {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]Bucket, 0, len(m.buckets))
@@ -73,9 +76,9 @@ func (m *metaStore) listBuckets() []Bucket {
 	return out
 }
 
-// putObject registers object metadata. ErrNoBucket if the bucket
+// PutObject registers object metadata. ErrNoBucket if the bucket
 // doesn't exist — objects can never outlive their bucket.
-func (m *metaStore) putObject(bucket, key string, meta ObjectMeta) error {
+func (m *MetaStore) PutObject(bucket, key string, meta ObjectMeta) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.buckets[bucket]; !ok {
@@ -85,7 +88,8 @@ func (m *metaStore) putObject(bucket, key string, meta ObjectMeta) error {
 	return nil
 }
 
-func (m *metaStore) getObject(bucket, key string) (*ObjectMeta, error) {
+// GetObject returns object metadata for key in bucket.
+func (m *MetaStore) GetObject(bucket, key string) (*ObjectMeta, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if objs, ok := m.objects[bucket]; ok {
@@ -96,7 +100,8 @@ func (m *metaStore) getObject(bucket, key string) (*ObjectMeta, error) {
 	return nil, ErrNoKey
 }
 
-func (m *metaStore) deleteObject(bucket, key string) error {
+// DeleteObject removes object metadata. ErrNoKey if not found.
+func (m *MetaStore) DeleteObject(bucket, key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if objs, ok := m.objects[bucket]; ok {
@@ -108,7 +113,9 @@ func (m *metaStore) deleteObject(bucket, key string) error {
 	return ErrNoKey
 }
 
-func (m *metaStore) listObjects(bucket, prefix string) []ObjectMeta {
+// ListObjects returns metadata for all objects in bucket matching prefix.
+// Sorted by key for S3 compatibility.
+func (m *MetaStore) ListObjects(bucket, prefix string) []ObjectMeta {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []ObjectMeta
@@ -121,4 +128,46 @@ func (m *metaStore) listObjects(bucket, prefix string) []ObjectMeta {
 		sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	}
 	return out
+}
+
+// --- Raft snapshot support ---
+
+// Snapshot serializes the store to w for Raft persistence.
+func (m *MetaStore) Snapshot(w io.Writer) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return json.NewEncoder(w).Encode(m)
+}
+
+// Restore loads state from a Raft snapshot.
+func (m *MetaStore) Restore(r io.Reader) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return json.NewDecoder(r).Decode(m)
+}
+
+// MarshalJSON implements json.Marshaler for snapshot serialization.
+func (m *MetaStore) MarshalJSON() ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return json.Marshal(map[string]interface{}{
+		"buckets": m.buckets,
+		"objects": m.objects,
+	})
+}
+
+// UnmarshalJSON implements json.Unmarshaler for snapshot restoration.
+func (m *MetaStore) UnmarshalJSON(data []byte) error {
+	var v struct {
+		Buckets map[string]*Bucket                 `json:"buckets"`
+		Objects map[string]map[string]*ObjectMeta `json:"objects"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.buckets = v.Buckets
+	m.objects = v.Objects
+	return nil
 }
