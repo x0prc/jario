@@ -6,9 +6,7 @@ package raft
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/hashicorp/raft"

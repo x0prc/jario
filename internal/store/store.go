@@ -67,14 +67,13 @@ func (s *Store) PutObject(bucket, key string, body io.Reader) (string, error) {
 		return "", fmt.Errorf("write blob: %w", err)
 	}
 
-	s.meta.PutObject(bucket, key, ObjectMeta{
+	if err := s.meta.PutObject(bucket, key, ObjectMeta{
 		Key:       key,
 		Size:      int64(len(data)),
 		ETag:      shaHex,
 		Sha256:    shaHex,
 		CreatedAt: time.Now(),
-	})
-	if err != nil {
+	}); err != nil {
 		return "", err
 	}
 	return shaHex, nil
