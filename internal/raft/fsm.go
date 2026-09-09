@@ -14,8 +14,8 @@ type fsm struct {
 	meta *store.MetaStore
 }
 
-func newFSM() *fsm {
-	return &fsm{meta: store.NewMetaStore()}
+func newFSM(meta *store.MetaStore) *fsm {
+	return &fsm{meta: meta}
 }
 
 // Apply is called by Raft on every committed log entry.

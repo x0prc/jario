@@ -9,16 +9,12 @@ import (
 	"os"
 	"time"
 
+	"github.com/c0ldheat/jario/internal/store"
 	"github.com/hashicorp/raft"
 )
 
-// Op is a metadata mutation replicated through Raft.
-type Op struct {
-	Kind   string          `json:"kind"` // create_bucket, delete_bucket, put_object, delete_object
-	Bucket string          `json:"bucket,omitempty"`
-	Key    string          `json:"key,omitempty"`
-	Meta   json.RawMessage `json:"meta,omitempty"` // serialized ObjectMeta for put_object
-}
+// Op is an alias for store.RaftOp — the metadata mutation replicated through Raft.
+type Op = store.RaftOp
 
 // RaftNode wraps hashicorp/raft. One per process.
 type RaftNode struct {
@@ -26,9 +22,9 @@ type RaftNode struct {
 	fsm  *fsm
 }
 
-// New creates a Raft node. Single-node bootstrap if no peers given.
-func New(nodeID, raftDir, bind string) (*RaftNode, error) {
-	fsm := newFSM()
+// New creates a Raft node sharing the given MetaStore with the caller.
+func New(nodeID, raftDir, bind string, meta *store.MetaStore) (*RaftNode, error) {
+	fsm := newFSM(meta)
 	config := raft.DefaultConfig()
 	config.LocalID = raft.ServerID(nodeID)
 	config.SnapshotInterval = 120 * time.Second
@@ -82,6 +78,6 @@ func (n *RaftNode) IsLeader() bool {
 }
 
 // Meta returns the FSM's metaStore for reading.
-func (n *RaftNode) Meta() interface{} {
+func (n *RaftNode) Meta() *store.MetaStore {
 	return n.fsm.meta
 }

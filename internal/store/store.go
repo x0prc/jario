@@ -1,12 +1,13 @@
 // Package store implements the jario storage engine.
 // Blobs live on disk, content-addressed by sha256.
-// Metadata lives in memory, protected by a RWMutex,
-// and will later be Raft-replicated.
+// Metadata lives in memory, protected by a RWMutex.
+// When wired to Raft, metadata mutations are replicated.
 package store
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -19,30 +20,96 @@ var (
 	ErrBucketExists = fmt.Errorf("BucketAlreadyExists")
 	ErrNoBucket     = fmt.Errorf("NoSuchBucket")
 	ErrNoKey        = fmt.Errorf("NoSuchKey")
+	ErrNotLeader    = fmt.Errorf("not the Raft leader")
 )
+
+// Rafter is the interface Store uses to replicate metadata through Raft.
+// Implemented by raft.RaftNode — avoids circular imports.
+type Rafter interface {
+	Apply(op RaftOp) error
+	IsLeader() bool
+}
+
+// RaftOp mirrors raft.Op but lives in store to avoid circular imports.
+type RaftOp struct {
+	Kind   string          `json:"kind"`
+	Bucket string          `json:"bucket,omitempty"`
+	Key    string          `json:"key,omitempty"`
+	Meta   json.RawMessage `json:"meta,omitempty"`
+}
 
 // Store is the storage engine. Owns blob dir and metadata index.
 type Store struct {
 	dataDir string
 	meta    *MetaStore
+	raft    Rafter // nil in standalone mode (no replication)
 }
 
-// New creates a Store rooted at dataDir. Creates blobs/ subdirectory.
+// New creates a Store rooted at dataDir with its own MetaStore.
 func New(dataDir string) *Store {
 	os.MkdirAll(filepath.Join(dataDir, "blobs"), 0755)
 	return &Store{dataDir: dataDir, meta: NewMetaStore()}
 }
 
+// NewWithMeta creates a Store sharing the given MetaStore (for Raft wiring).
+func NewWithMeta(dataDir string, meta *MetaStore) *Store {
+	os.MkdirAll(filepath.Join(dataDir, "blobs"), 0755)
+	return &Store{dataDir: dataDir, meta: meta}
+}
+
+// SetRaft wires the store to a Raft node for metadata replication.
+func (s *Store) SetRaft(r Rafter) {
+	s.raft = r
+}
+
+// raftApply sends an op through Raft if wired, otherwise applies directly.
+func (s *Store) raftApply(op RaftOp) error {
+	if s.raft == nil {
+		return s.applyLocally(op)
+	}
+	if !s.raft.IsLeader() {
+		return ErrNotLeader
+	}
+	return s.raft.Apply(op)
+}
+
+// applyLocally applies a metadata op directly to the in-memory MetaStore.
+// Used in standalone mode (no Raft) and in tests.
+func (s *Store) applyLocally(op RaftOp) error {
+	switch op.Kind {
+	case "create_bucket":
+		return s.meta.CreateBucket(op.Bucket)
+	case "delete_bucket":
+		return s.meta.DeleteBucket(op.Bucket)
+	case "put_object":
+		var meta ObjectMeta
+		if err := json.Unmarshal(op.Meta, &meta); err != nil {
+			return err
+		}
+		return s.meta.PutObject(op.Bucket, op.Key, meta)
+	case "delete_object":
+		return s.meta.DeleteObject(op.Bucket, op.Key)
+	default:
+		return nil
+	}
+}
+
 // --- Bucket operations ---
 
-// CreateBucket adds a bucket. ErrBucketExists on duplicate.
+// CreateBucket adds a bucket. Replicated through Raft when wired.
 func (s *Store) CreateBucket(name string) error {
-	return s.meta.CreateBucket(name)
+	if err := s.raftApply(RaftOp{Kind: "create_bucket", Bucket: name}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // DeleteBucket removes a bucket and all its object metadata.
 func (s *Store) DeleteBucket(name string) error {
-	return s.meta.DeleteBucket(name)
+	if err := s.raftApply(RaftOp{Kind: "delete_bucket", Bucket: name}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ListBuckets returns all buckets, unordered.
@@ -52,7 +119,7 @@ func (s *Store) ListBuckets() []Bucket {
 
 // --- Object operations ---
 
-// PutObject writes body as a blob, registers metadata.
+// PutObject writes body as a blob, registers metadata via Raft.
 // Returns hex-encoded sha256 etag.
 func (s *Store) PutObject(bucket, key string, body io.Reader) (string, error) {
 	data, err := io.ReadAll(body)
@@ -67,13 +134,18 @@ func (s *Store) PutObject(bucket, key string, body io.Reader) (string, error) {
 		return "", fmt.Errorf("write blob: %w", err)
 	}
 
-	if err := s.meta.PutObject(bucket, key, ObjectMeta{
+	meta := ObjectMeta{
 		Key:       key,
 		Size:      int64(len(data)),
 		ETag:      shaHex,
 		Sha256:    shaHex,
 		CreatedAt: time.Now(),
-	}); err != nil {
+	}
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return "", fmt.Errorf("marshal meta: %w", err)
+	}
+	if err := s.raftApply(RaftOp{Kind: "put_object", Bucket: bucket, Key: key, Meta: metaJSON}); err != nil {
 		return "", err
 	}
 	return shaHex, nil
@@ -92,15 +164,17 @@ func (s *Store) GetObject(bucket, key string) (io.ReadCloser, *ObjectMeta, error
 	return f, meta, nil
 }
 
-// DeleteObject removes object metadata and its blob.
-// Blob deletion is idempotent — safe to call twice.
+// DeleteObject removes object metadata (via Raft) and its blob.
 func (s *Store) DeleteObject(bucket, key string) error {
 	meta, err := s.meta.GetObject(bucket, key)
 	if err != nil {
 		return err
 	}
+	if err := s.raftApply(RaftOp{Kind: "delete_object", Bucket: bucket, Key: key}); err != nil {
+		return err
+	}
+	// Blob deletion is idempotent — safe even if Raft round-trips.
 	os.Remove(s.blobPath(meta.Sha256))
-	s.meta.DeleteObject(bucket, key)
 	return nil
 }
 
