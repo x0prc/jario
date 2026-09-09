@@ -28,16 +28,22 @@ func main() {
 	secretKey := flag.String("secret-key", "minioadmin", "S3 secret key for SigV4 auth")
 	flag.Parse()
 
-	// Storage engine.
-	st := store.New(*dataDir)
+	// Shared metadata store — Raft FSM and Store both reference this.
+	meta := store.NewMetaStore()
 
-	// Raft node — initialized but not yet wired to store (Task 2).
+	// Storage engine.
+	st := store.NewWithMeta(*dataDir, meta)
+
+	// Raft node — FSM applies mutations to the shared meta.
 	raftDir := *dataDir + "/raft"
-	raftNode, err := raft.New(*nodeID, raftDir, *raftAddr)
+	raftNode, err := raft.New(*nodeID, raftDir, *raftAddr, meta)
 	if err != nil {
 		log.Fatalf("raft init: %v", err)
 	}
 	defer raftNode.Close()
+
+	// Wire store to Raft — metadata mutations now go through consensus.
+	st.SetRaft(raftNode)
 
 	// Wait for leader election (single-node bootstraps instantly).
 	time.Sleep(500 * time.Millisecond)
