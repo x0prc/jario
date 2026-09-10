@@ -26,6 +26,7 @@ func main() {
 	tlsKey := flag.String("tls-key", "", "path to TLS private key file (optional)")
 	accessKey := flag.String("access-key", "minioadmin", "S3 access key for SigV4 auth")
 	secretKey := flag.String("secret-key", "minioadmin", "S3 secret key for SigV4 auth")
+	bootstrap := flag.Bool("bootstrap", false, "bootstrap a new single-node Raft cluster (first run only)")
 	flag.Parse()
 
 	// Shared metadata store — Raft FSM and Store both reference this.
@@ -44,6 +45,11 @@ func main() {
 
 	// Wire store to Raft — metadata mutations now go through consensus.
 	st.SetRaft(raftNode)
+
+	// Bootstrap single-node cluster on first run.
+	if *bootstrap {
+		raftNode.Bootstrap()
+	}
 
 	// Wait for leader election (single-node bootstraps instantly).
 	time.Sleep(500 * time.Millisecond)

@@ -18,8 +18,9 @@ type Op = store.RaftOp
 
 // RaftNode wraps hashicorp/raft. One per process.
 type RaftNode struct {
-	raft *raft.Raft
-	fsm  *fsm
+	raft    *raft.Raft
+	fsm     *fsm
+	localID raft.ServerID
 }
 
 // New creates a Raft node sharing the given MetaStore with the caller.
@@ -29,6 +30,9 @@ func New(nodeID, raftDir, bind string, meta *store.MetaStore) (*RaftNode, error)
 	config.LocalID = raft.ServerID(nodeID)
 	config.SnapshotInterval = 120 * time.Second
 	config.SnapshotThreshold = 8192
+	config.ElectionTimeout = 300 * time.Millisecond
+	config.HeartbeatTimeout = 200 * time.Millisecond
+	config.LeaderLeaseTimeout = 150 * time.Millisecond
 
 	transport, err := raft.NewTCPTransport(bind, nil, 3, 10*time.Second, os.Stderr)
 	if err != nil {
@@ -51,7 +55,20 @@ func New(nodeID, raftDir, bind string, meta *store.MetaStore) (*RaftNode, error)
 		return nil, fmt.Errorf("raft new: %w", err)
 	}
 
-	return &RaftNode{raft: r, fsm: fsm}, nil
+	return &RaftNode{raft: r, fsm: fsm, localID: raft.ServerID(nodeID)}, nil
+}
+
+// Bootstrap adds this node as the sole server in a new cluster.
+func (n *RaftNode) Bootstrap() {
+	cfg := raft.Configuration{
+		Servers: []raft.Server{
+			{ID: n.localID, Address: "127.0.0.1:0"},
+		},
+	}
+	future := n.raft.BootstrapCluster(cfg)
+	if err := future.Error(); err != nil {
+		panic(fmt.Sprintf("bootstrap: %v", err))
+	}
 }
 
 // Apply replicates a metadata operation. Blocks until committed.

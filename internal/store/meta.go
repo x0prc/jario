@@ -130,6 +130,30 @@ func (m *MetaStore) ListObjects(bucket, prefix string) []ObjectMeta {
 	return out
 }
 
+// ListObjectsPaged returns a page of objects matching prefix, sorted by key.
+// startAfter is exclusive (results begin after this key). maxKeys limits results.
+// Returns the page and whether more results exist (nextContinuationToken = first key of next page).
+func (m *MetaStore) ListObjectsPaged(bucket, prefix, startAfter string, maxKeys int) (objs []ObjectMeta, nextToken string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if maxKeys <= 0 {
+		maxKeys = 1000
+	}
+	if bucketObjs, ok := m.objects[bucket]; ok {
+		for k, v := range bucketObjs {
+			if (prefix == "" || strings.HasPrefix(k, prefix)) && k > startAfter {
+				objs = append(objs, *v)
+			}
+		}
+		sort.Slice(objs, func(i, j int) bool { return objs[i].Key < objs[j].Key })
+		if len(objs) > maxKeys {
+			objs = objs[:maxKeys]
+			nextToken = objs[len(objs)-1].Key
+		}
+	}
+	return objs, nextToken
+}
+
 // --- Raft snapshot support ---
 
 // Snapshot serializes the store to w for Raft persistence.
@@ -141,9 +165,18 @@ func (m *MetaStore) Snapshot(w io.Writer) error {
 
 // Restore loads state from a Raft snapshot.
 func (m *MetaStore) Restore(r io.Reader) error {
+	var v struct {
+		Buckets map[string]*Bucket                 `json:"buckets"`
+		Objects map[string]map[string]*ObjectMeta `json:"objects"`
+	}
+	if err := json.NewDecoder(r).Decode(&v); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return json.NewDecoder(r).Decode(m)
+	m.buckets = v.Buckets
+	m.objects = v.Objects
+	return nil
 }
 
 // MarshalJSON implements json.Marshaler for snapshot serialization.
