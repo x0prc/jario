@@ -83,12 +83,13 @@ type objectEntry struct {
 }
 
 type listBucketResult struct {
-	XMLName     xml.Name      `xml:"ListBucketResult"`
-	Xmlns       string        `xml:"xmlns,attr"`
-	Name        string        `xml:"Name"`
-	Prefix      string        `xml:"Prefix"`
-	KeyCount    int           `xml:"KeyCount"`
-	MaxKeys     int           `xml:"MaxKeys"`
-	IsTruncated bool          `xml:"IsTruncated"`
-	Contents    []objectEntry `xml:"Contents"`
+	XMLName                xml.Name      `xml:"ListBucketResult"`
+	Xmlns                  string        `xml:"xmlns,attr"`
+	Name                   string        `xml:"Name"`
+	Prefix                 string        `xml:"Prefix"`
+	KeyCount               int           `xml:"KeyCount"`
+	MaxKeys                int           `xml:"MaxKeys"`
+	IsTruncated            bool          `xml:"IsTruncated"`
+	NextContinuationToken  string        `xml:"NextContinuationToken,omitempty"`
+	Contents               []objectEntry `xml:"Contents"`
 }

@@ -188,6 +188,11 @@ func (s *Store) ListObjects(bucket, prefix string) []ObjectMeta {
 	return s.meta.ListObjects(bucket, prefix)
 }
 
+// ListObjectsPaged returns a paginated list of objects.
+func (s *Store) ListObjectsPaged(bucket, prefix, startAfter string, maxKeys int) ([]ObjectMeta, string) {
+	return s.meta.ListObjectsPaged(bucket, prefix, startAfter, maxKeys)
+}
+
 // --- helpers ---
 
 // blobPath returns the shard path: blobs/<sha[0:2]>/<sha>

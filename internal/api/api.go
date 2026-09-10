@@ -87,18 +87,31 @@ func (h *Handler) listBuckets(w http.ResponseWriter, r *http.Request) {
 	writeXML(w, res)
 }
 
-// listObjectsV2 handles GET /{bucket}?list-type=2.
-// ponytail: no pagination — MaxKeys and continuation-token are ignored,
-// IsTruncated is always false. Fine until a bucket exceeds ~1000 keys.
+// listObjectsV2 handles GET /{bucket}?list-type=2 with pagination.
 func (h *Handler) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) {
 	prefix := r.URL.Query().Get("prefix")
-	objects := h.st.ListObjects(bucket, prefix)
+	startAfter := r.URL.Query().Get("start-after")
+	if ct := r.URL.Query().Get("continuation-token"); ct != "" {
+		startAfter = ct
+	}
+	maxKeys := 1000
+	if mk := r.URL.Query().Get("max-keys"); mk != "" {
+		if n, err := strconv.Atoi(mk); err == nil && n > 0 && n <= 1000 {
+			maxKeys = n
+		}
+	}
+
+	objects, nextToken := h.st.ListObjectsPaged(bucket, prefix, startAfter, maxKeys)
 	res := listBucketResult{
-		Xmlns:    s3xmlns,
-		Name:     bucket,
-		Prefix:   prefix,
-		MaxKeys:  1000,
-		KeyCount: len(objects),
+		Xmlns:      s3xmlns,
+		Name:       bucket,
+		Prefix:     prefix,
+		MaxKeys:    maxKeys,
+		KeyCount:   len(objects),
+		IsTruncated: nextToken != "",
+	}
+	if nextToken != "" {
+		res.NextContinuationToken = nextToken
 	}
 	for _, o := range objects {
 		res.Contents = append(res.Contents, objectEntry{
