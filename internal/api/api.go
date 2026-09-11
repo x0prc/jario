@@ -103,11 +103,11 @@ func (h *Handler) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket s
 
 	objects, nextToken := h.st.ListObjectsPaged(bucket, prefix, startAfter, maxKeys)
 	res := listBucketResult{
-		Xmlns:      s3xmlns,
-		Name:       bucket,
-		Prefix:     prefix,
-		MaxKeys:    maxKeys,
-		KeyCount:   len(objects),
+		Xmlns:       s3xmlns,
+		Name:        bucket,
+		Prefix:      prefix,
+		MaxKeys:     maxKeys,
+		KeyCount:    len(objects),
 		IsTruncated: nextToken != "",
 	}
 	if nextToken != "" {

@@ -25,6 +25,9 @@ data and memory containerisation for models
 go test ./...
 ```
 
-- `internal/store` — bucket CRUD, object CRUD, prefix listing
-- `internal/api` — bucket ops, S3 XML errors, routing (object ops stubs)
-- `internal/raft` — apply, snapshot, FSM
+All tests live in `tests/` (black-box, one package):
+
+- store — bucket CRUD, object CRUD, prefix listing, pagination
+- api — bucket/object ops, S3 XML errors, SigV4 auth, ListObjectsV2 pagination
+- raft — single-node apply, snapshot/restore
+- config — defaults, file load, missing-file error

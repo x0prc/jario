@@ -166,7 +166,7 @@ func (m *MetaStore) Snapshot(w io.Writer) error {
 // Restore loads state from a Raft snapshot.
 func (m *MetaStore) Restore(r io.Reader) error {
 	var v struct {
-		Buckets map[string]*Bucket                 `json:"buckets"`
+		Buckets map[string]*Bucket                `json:"buckets"`
 		Objects map[string]map[string]*ObjectMeta `json:"objects"`
 	}
 	if err := json.NewDecoder(r).Decode(&v); err != nil {
@@ -192,7 +192,7 @@ func (m *MetaStore) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON implements json.Unmarshaler for snapshot restoration.
 func (m *MetaStore) UnmarshalJSON(data []byte) error {
 	var v struct {
-		Buckets map[string]*Bucket                 `json:"buckets"`
+		Buckets map[string]*Bucket                `json:"buckets"`
 		Objects map[string]map[string]*ObjectMeta `json:"objects"`
 	}
 	if err := json.Unmarshal(data, &v); err != nil {
