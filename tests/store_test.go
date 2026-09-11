@@ -1,14 +1,17 @@
-package store
+// Black-box tests for the storage engine (standalone mode, no Raft).
+package tests
 
 import (
 	"errors"
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/c0ldheat/jario/internal/store"
 )
 
-func TestCreateBucket(t *testing.T) {
-	s := New(t.TempDir())
+func TestStoreCreateBucket(t *testing.T) {
+	s := store.New(t.TempDir())
 	err := s.CreateBucket("test-bucket")
 	if err != nil {
 		t.Fatalf("CreateBucket: %v", err)
@@ -19,17 +22,17 @@ func TestCreateBucket(t *testing.T) {
 	}
 }
 
-func TestCreateBucketDuplicate(t *testing.T) {
-	s := New(t.TempDir())
+func TestStoreCreateBucketDuplicate(t *testing.T) {
+	s := store.New(t.TempDir())
 	s.CreateBucket("test-bucket")
 	err := s.CreateBucket("test-bucket")
-	if !errors.Is(err, ErrBucketExists) {
+	if !errors.Is(err, store.ErrBucketExists) {
 		t.Fatalf("expected ErrBucketExists, got %v", err)
 	}
 }
 
-func TestDeleteBucket(t *testing.T) {
-	s := New(t.TempDir())
+func TestStoreDeleteBucket(t *testing.T) {
+	s := store.New(t.TempDir())
 	s.CreateBucket("test-bucket")
 	if err := s.DeleteBucket("test-bucket"); err != nil {
 		t.Fatalf("DeleteBucket: %v", err)
@@ -39,16 +42,16 @@ func TestDeleteBucket(t *testing.T) {
 	}
 }
 
-func TestDeleteBucketNonexistent(t *testing.T) {
-	s := New(t.TempDir())
+func TestStoreDeleteBucketNonexistent(t *testing.T) {
+	s := store.New(t.TempDir())
 	err := s.DeleteBucket("no-bucket")
-	if !errors.Is(err, ErrNoBucket) {
+	if !errors.Is(err, store.ErrNoBucket) {
 		t.Fatalf("expected ErrNoBucket, got %v", err)
 	}
 }
 
-func TestPutGetObject(t *testing.T) {
-	s := New(t.TempDir())
+func TestStorePutGetObject(t *testing.T) {
+	s := store.New(t.TempDir())
 	s.CreateBucket("test-bucket")
 	etag, err := s.PutObject("test-bucket", "hello.txt", strings.NewReader("hello world"))
 	if err != nil {
@@ -71,38 +74,38 @@ func TestPutGetObject(t *testing.T) {
 	}
 }
 
-func TestPutObjectNoBucket(t *testing.T) {
-	s := New(t.TempDir())
+func TestStorePutObjectNoBucket(t *testing.T) {
+	s := store.New(t.TempDir())
 	_, err := s.PutObject("no-bucket", "hello.txt", strings.NewReader("hello"))
-	if !errors.Is(err, ErrNoBucket) {
+	if !errors.Is(err, store.ErrNoBucket) {
 		t.Fatalf("expected ErrNoBucket, got %v", err)
 	}
 }
 
-func TestGetObjectNonexistent(t *testing.T) {
-	s := New(t.TempDir())
+func TestStoreGetObjectNonexistent(t *testing.T) {
+	s := store.New(t.TempDir())
 	s.CreateBucket("test-bucket")
 	_, _, err := s.GetObject("test-bucket", "no-key")
-	if !errors.Is(err, ErrNoKey) {
+	if !errors.Is(err, store.ErrNoKey) {
 		t.Fatalf("expected ErrNoKey, got %v", err)
 	}
 }
 
-func TestDeleteObject(t *testing.T) {
-	s := New(t.TempDir())
+func TestStoreDeleteObject(t *testing.T) {
+	s := store.New(t.TempDir())
 	s.CreateBucket("test-bucket")
 	s.PutObject("test-bucket", "hello.txt", strings.NewReader("hello"))
 	if err := s.DeleteObject("test-bucket", "hello.txt"); err != nil {
 		t.Fatalf("DeleteObject: %v", err)
 	}
 	_, _, err := s.GetObject("test-bucket", "hello.txt")
-	if !errors.Is(err, ErrNoKey) {
+	if !errors.Is(err, store.ErrNoKey) {
 		t.Fatal("expected ErrNoKey after delete")
 	}
 }
 
-func TestListObjects(t *testing.T) {
-	s := New(t.TempDir())
+func TestStoreListObjects(t *testing.T) {
+	s := store.New(t.TempDir())
 	s.CreateBucket("test-bucket")
 	s.PutObject("test-bucket", "b/1.txt", strings.NewReader("3"))
 	s.PutObject("test-bucket", "a/2.txt", strings.NewReader("2"))
@@ -117,5 +120,26 @@ func TestListObjects(t *testing.T) {
 	objs = s.ListObjects("test-bucket", "")
 	if len(objs) != 3 {
 		t.Fatalf("expected 3 objects, got %d", len(objs))
+	}
+}
+
+func TestStoreListObjectsPaged(t *testing.T) {
+	s := store.New(t.TempDir())
+	s.CreateBucket("test-bucket")
+	for _, k := range []string{"a/1.txt", "a/2.txt", "a/3.txt"} {
+		s.PutObject("test-bucket", k, strings.NewReader("x"))
+	}
+	// First page of 2.
+	page, next := s.ListObjectsPaged("test-bucket", "a/", "", 2)
+	if len(page) != 2 || next == "" {
+		t.Fatalf("expected 2 objs + next token, got %d, %q", len(page), next)
+	}
+	// Second page continues after the token.
+	page2, next2 := s.ListObjectsPaged("test-bucket", "a/", next, 2)
+	if len(page2) != 1 || next2 != "" {
+		t.Fatalf("expected last page of 1, got %d, %q", len(page2), next2)
+	}
+	if page2[0].Key != "a/3.txt" {
+		t.Fatalf("expected a/3.txt, got %s", page2[0].Key)
 	}
 }

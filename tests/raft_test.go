@@ -1,4 +1,5 @@
-package raft
+// Black-box tests for Raft replication (single-node cluster).
+package tests
 
 import (
 	"encoding/json"
@@ -6,14 +7,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c0ldheat/jario/internal/raft"
 	"github.com/c0ldheat/jario/internal/store"
 )
 
 // newTestNode creates a single-node Raft cluster for testing.
-func newTestNode(t *testing.T) (*RaftNode, *store.MetaStore) {
+func newTestNode(t *testing.T) (*raft.RaftNode, *store.MetaStore) {
 	t.Helper()
 	meta := store.NewMetaStore()
-	node, err := New("test-node", t.TempDir(), "localhost:0", meta)
+	node, err := raft.New("test-node", t.TempDir(), "localhost:0", meta)
 	if err != nil {
 		t.Fatalf("raft.New: %v", err)
 	}
@@ -33,7 +35,7 @@ func newTestNode(t *testing.T) (*RaftNode, *store.MetaStore) {
 func TestRaftApplyCreateBucket(t *testing.T) {
 	node, meta := newTestNode(t)
 
-	if err := node.Apply(Op{Kind: "create_bucket", Bucket: "mybucket"}); err != nil {
+	if err := node.Apply(raft.Op{Kind: "create_bucket", Bucket: "mybucket"}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -50,7 +52,7 @@ func TestRaftApplyPutObject(t *testing.T) {
 	objMeta := store.ObjectMeta{Key: "photo.jpg", Size: 1024, ETag: "abc123", Sha256: "abc123", CreatedAt: time.Now()}
 	metaJSON, _ := json.Marshal(objMeta)
 
-	if err := node.Apply(Op{Kind: "put_object", Bucket: "images", Key: "photo.jpg", Meta: metaJSON}); err != nil {
+	if err := node.Apply(raft.Op{Kind: "put_object", Bucket: "images", Key: "photo.jpg", Meta: metaJSON}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -69,7 +71,7 @@ func TestRaftApplyDeleteObject(t *testing.T) {
 	meta.CreateBucket("data")
 	meta.PutObject("data", "file.txt", store.ObjectMeta{Key: "file.txt", Sha256: "aaa"})
 
-	if err := node.Apply(Op{Kind: "delete_object", Bucket: "data", Key: "file.txt"}); err != nil {
+	if err := node.Apply(raft.Op{Kind: "delete_object", Bucket: "data", Key: "file.txt"}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -83,7 +85,7 @@ func TestRaftApplyDeleteBucket(t *testing.T) {
 	node, meta := newTestNode(t)
 
 	meta.CreateBucket("temp")
-	if err := node.Apply(Op{Kind: "delete_bucket", Bucket: "temp"}); err != nil {
+	if err := node.Apply(raft.Op{Kind: "delete_bucket", Bucket: "temp"}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
