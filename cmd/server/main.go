@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"github.com/c0ldheat/jario/internal/api"
+	"github.com/c0ldheat/jario/internal/config"
 	"github.com/c0ldheat/jario/internal/raft"
 	"github.com/c0ldheat/jario/internal/store"
 )
 
 func main() {
+	configPath := flag.String("config", "", "path to TOML config file (optional, flags override file)")
 	dataDir := flag.String("data-dir", "./data", "root directory for blobs and metadata")
 	listen := flag.String("listen", ":9000", "HTTP listen address (host:port)")
 	nodeID := flag.String("node-id", "node1", "unique node identifier for Raft cluster")
@@ -29,15 +31,44 @@ func main() {
 	bootstrap := flag.Bool("bootstrap", false, "bootstrap a new single-node Raft cluster (first run only)")
 	flag.Parse()
 
+	// Precedence: defaults < config file < explicitly-set flags.
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	// Only flags passed on the command line override the file.
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "data-dir":
+			cfg.DataDir = *dataDir
+		case "listen":
+			cfg.Listen = *listen
+		case "node-id":
+			cfg.NodeID = *nodeID
+		case "raft-addr":
+			cfg.RaftAddr = *raftAddr
+		case "tls-cert":
+			cfg.TLSCert = *tlsCert
+		case "tls-key":
+			cfg.TLSKey = *tlsKey
+		case "access-key":
+			cfg.AccessKey = *accessKey
+		case "secret-key":
+			cfg.SecretKey = *secretKey
+		case "bootstrap":
+			cfg.Bootstrap = *bootstrap
+		}
+	})
+
 	// Shared metadata store — Raft FSM and Store both reference this.
 	meta := store.NewMetaStore()
 
 	// Storage engine.
-	st := store.NewWithMeta(*dataDir, meta)
+	st := store.NewWithMeta(cfg.DataDir, meta)
 
 	// Raft node — FSM applies mutations to the shared meta.
-	raftDir := *dataDir + "/raft"
-	raftNode, err := raft.New(*nodeID, raftDir, *raftAddr, meta)
+	raftDir := cfg.DataDir + "/raft"
+	raftNode, err := raft.New(cfg.NodeID, raftDir, cfg.RaftAddr, meta)
 	if err != nil {
 		log.Fatalf("raft init: %v", err)
 	}
@@ -47,7 +78,7 @@ func main() {
 	st.SetRaft(raftNode)
 
 	// Bootstrap single-node cluster on first run.
-	if *bootstrap {
+	if cfg.Bootstrap {
 		raftNode.Bootstrap()
 	}
 
@@ -58,9 +89,9 @@ func main() {
 	}
 
 	// HTTP server.
-	handler := api.NewHandler(st, *accessKey, *secretKey)
+	handler := api.NewHandler(st, cfg.AccessKey, cfg.SecretKey)
 	srv := &http.Server{
-		Addr:         *listen,
+		Addr:         cfg.Listen,
 		Handler:      handler,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
@@ -70,11 +101,11 @@ func main() {
 	// Start server (TLS or plain).
 	errCh := make(chan error, 1)
 	go func() {
-		if *tlsCert != "" && *tlsKey != "" {
-			log.Printf("jario listening on %s (TLS)", *listen)
-			errCh <- srv.ListenAndServeTLS(*tlsCert, *tlsKey)
+		if cfg.TLSCert != "" && cfg.TLSKey != "" {
+			log.Printf("jario listening on %s (TLS)", cfg.Listen)
+			errCh <- srv.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey)
 		} else {
-			log.Printf("jario listening on %s", *listen)
+			log.Printf("jario listening on %s", cfg.Listen)
 			errCh <- srv.ListenAndServe()
 		}
 	}()
