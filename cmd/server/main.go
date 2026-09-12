@@ -79,7 +79,9 @@ func main() {
 
 	// Bootstrap single-node cluster on first run.
 	if cfg.Bootstrap {
-		raftNode.Bootstrap()
+		if err := raftNode.Bootstrap(); err != nil {
+			log.Fatalf("raft bootstrap: %v", err)
+		}
 	}
 
 	// Wait for leader election (single-node bootstraps instantly).

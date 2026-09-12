@@ -21,6 +21,7 @@ type RaftNode struct {
 	raft    *raft.Raft
 	fsm     *fsm
 	localID raft.ServerID
+	addr    raft.ServerAddress
 }
 
 // New creates a Raft node sharing the given MetaStore with the caller.
@@ -55,20 +56,18 @@ func New(nodeID, raftDir, bind string, meta *store.MetaStore) (*RaftNode, error)
 		return nil, fmt.Errorf("raft new: %w", err)
 	}
 
-	return &RaftNode{raft: r, fsm: fsm, localID: raft.ServerID(nodeID)}, nil
+	return &RaftNode{raft: r, fsm: fsm, localID: raft.ServerID(nodeID), addr: transport.LocalAddr()}, nil
 }
 
 // Bootstrap adds this node as the sole server in a new cluster.
-func (n *RaftNode) Bootstrap() {
+// Call once on the first node; restarts reuse the stored Raft state.
+func (n *RaftNode) Bootstrap() error {
 	cfg := raft.Configuration{
 		Servers: []raft.Server{
-			{ID: n.localID, Address: "127.0.0.1:0"},
+			{ID: n.localID, Address: n.addr},
 		},
 	}
-	future := n.raft.BootstrapCluster(cfg)
-	if err := future.Error(); err != nil {
-		panic(fmt.Sprintf("bootstrap: %v", err))
-	}
+	return n.raft.BootstrapCluster(cfg).Error()
 }
 
 // Apply replicates a metadata operation. Blocks until committed.
@@ -92,9 +91,4 @@ func (n *RaftNode) Close() error {
 // IsLeader returns true if this node is the current Raft leader.
 func (n *RaftNode) IsLeader() bool {
 	return n.raft.State() == raft.Leader
-}
-
-// Meta returns the FSM's metaStore for reading.
-func (n *RaftNode) Meta() *store.MetaStore {
-	return n.fsm.meta
 }

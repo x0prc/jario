@@ -22,7 +22,9 @@ func newTestNode(t *testing.T) (*raft.RaftNode, *store.MetaStore) {
 	t.Cleanup(func() { node.Close() })
 
 	// Bootstrap single-node cluster.
-	node.Bootstrap()
+	if err := node.Bootstrap(); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
 
 	// Wait for leader election.
 	time.Sleep(500 * time.Millisecond)
