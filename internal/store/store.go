@@ -30,7 +30,8 @@ type Rafter interface {
 	IsLeader() bool
 }
 
-// RaftOp mirrors raft.Op but lives in store to avoid circular imports.
+// RaftOp is the metadata mutation replicated through Raft.
+// (raft.Op is an alias of this type.)
 type RaftOp struct {
 	Kind   string          `json:"kind"`
 	Bucket string          `json:"bucket,omitempty"`
@@ -65,7 +66,7 @@ func (s *Store) SetRaft(r Rafter) {
 // raftApply sends an op through Raft if wired, otherwise applies directly.
 func (s *Store) raftApply(op RaftOp) error {
 	if s.raft == nil {
-		return s.applyLocally(op)
+		return ApplyOp(s.meta, op)
 	}
 	if !s.raft.IsLeader() {
 		return ErrNotLeader
@@ -73,22 +74,22 @@ func (s *Store) raftApply(op RaftOp) error {
 	return s.raft.Apply(op)
 }
 
-// applyLocally applies a metadata op directly to the in-memory MetaStore.
-// Used in standalone mode (no Raft) and in tests.
-func (s *Store) applyLocally(op RaftOp) error {
+// ApplyOp applies a metadata op to m. Single source of truth shared by
+// the Raft FSM (replicated writes) and raftApply (standalone mode).
+func ApplyOp(m *MetaStore, op RaftOp) error {
 	switch op.Kind {
 	case "create_bucket":
-		return s.meta.CreateBucket(op.Bucket)
+		return m.CreateBucket(op.Bucket)
 	case "delete_bucket":
-		return s.meta.DeleteBucket(op.Bucket)
+		return m.DeleteBucket(op.Bucket)
 	case "put_object":
 		var meta ObjectMeta
 		if err := json.Unmarshal(op.Meta, &meta); err != nil {
 			return err
 		}
-		return s.meta.PutObject(op.Bucket, op.Key, meta)
+		return m.PutObject(op.Bucket, op.Key, meta)
 	case "delete_object":
-		return s.meta.DeleteObject(op.Bucket, op.Key)
+		return m.DeleteObject(op.Bucket, op.Key)
 	default:
 		return nil
 	}
@@ -98,18 +99,12 @@ func (s *Store) applyLocally(op RaftOp) error {
 
 // CreateBucket adds a bucket. Replicated through Raft when wired.
 func (s *Store) CreateBucket(name string) error {
-	if err := s.raftApply(RaftOp{Kind: "create_bucket", Bucket: name}); err != nil {
-		return err
-	}
-	return nil
+	return s.raftApply(RaftOp{Kind: "create_bucket", Bucket: name})
 }
 
 // DeleteBucket removes a bucket and all its object metadata.
 func (s *Store) DeleteBucket(name string) error {
-	if err := s.raftApply(RaftOp{Kind: "delete_bucket", Bucket: name}); err != nil {
-		return err
-	}
-	return nil
+	return s.raftApply(RaftOp{Kind: "delete_bucket", Bucket: name})
 }
 
 // ListBuckets returns all buckets, unordered.
@@ -181,11 +176,6 @@ func (s *Store) DeleteObject(bucket, key string) error {
 // GetMeta returns object metadata without opening the blob.
 func (s *Store) GetMeta(bucket, key string) (*ObjectMeta, error) {
 	return s.meta.GetObject(bucket, key)
-}
-
-// ListObjects returns metadata for all objects in bucket matching prefix.
-func (s *Store) ListObjects(bucket, prefix string) []ObjectMeta {
-	return s.meta.ListObjects(bucket, prefix)
 }
 
 // ListObjectsPaged returns a paginated list of objects.

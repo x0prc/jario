@@ -25,23 +25,7 @@ func (f *fsm) Apply(log *raft.Log) interface{} {
 	if err := json.Unmarshal(log.Data, &op); err != nil {
 		return err
 	}
-
-	switch op.Kind {
-	case "create_bucket":
-		return f.meta.CreateBucket(op.Bucket)
-	case "delete_bucket":
-		return f.meta.DeleteBucket(op.Bucket)
-	case "put_object":
-		var meta store.ObjectMeta
-		if err := json.Unmarshal(op.Meta, &meta); err != nil {
-			return err
-		}
-		return f.meta.PutObject(op.Bucket, op.Key, meta)
-	case "delete_object":
-		return f.meta.DeleteObject(op.Bucket, op.Key)
-	default:
-		return nil
-	}
+	return store.ApplyOp(f.meta, op)
 }
 
 // Snapshot captures current state for Raft log compaction.
