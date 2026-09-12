@@ -104,42 +104,33 @@ func TestStoreDeleteObject(t *testing.T) {
 	}
 }
 
-func TestStoreListObjects(t *testing.T) {
+func TestStoreListObjectsPaged(t *testing.T) {
 	s := store.New(t.TempDir())
 	s.CreateBucket("test-bucket")
 	s.PutObject("test-bucket", "b/1.txt", strings.NewReader("3"))
 	s.PutObject("test-bucket", "a/2.txt", strings.NewReader("2"))
 	s.PutObject("test-bucket", "a/1.txt", strings.NewReader("1"))
-	objs := s.ListObjects("test-bucket", "a/")
-	if len(objs) != 2 {
-		t.Fatalf("expected 2 objects with prefix, got %d", len(objs))
+
+	// Full listing: prefix filter + sorted by key.
+	objs, next := s.ListObjectsPaged("test-bucket", "a/", "", 1000)
+	if len(objs) != 2 || next != "" {
+		t.Fatalf("expected 2 objs, no next token, got %d, %q", len(objs), next)
 	}
 	if objs[0].Key != "a/1.txt" || objs[1].Key != "a/2.txt" {
 		t.Fatalf("expected sorted keys, got %s, %s", objs[0].Key, objs[1].Key)
 	}
-	objs = s.ListObjects("test-bucket", "")
-	if len(objs) != 3 {
-		t.Fatalf("expected 3 objects, got %d", len(objs))
-	}
-}
 
-func TestStoreListObjectsPaged(t *testing.T) {
-	s := store.New(t.TempDir())
-	s.CreateBucket("test-bucket")
-	for _, k := range []string{"a/1.txt", "a/2.txt", "a/3.txt"} {
-		s.PutObject("test-bucket", k, strings.NewReader("x"))
-	}
-	// First page of 2.
-	page, next := s.ListObjectsPaged("test-bucket", "a/", "", 2)
+	// First page of 2 over all keys.
+	page, next := s.ListObjectsPaged("test-bucket", "", "", 2)
 	if len(page) != 2 || next == "" {
 		t.Fatalf("expected 2 objs + next token, got %d, %q", len(page), next)
 	}
 	// Second page continues after the token.
-	page2, next2 := s.ListObjectsPaged("test-bucket", "a/", next, 2)
+	page2, next2 := s.ListObjectsPaged("test-bucket", "", next, 2)
 	if len(page2) != 1 || next2 != "" {
 		t.Fatalf("expected last page of 1, got %d, %q", len(page2), next2)
 	}
-	if page2[0].Key != "a/3.txt" {
-		t.Fatalf("expected a/3.txt, got %s", page2[0].Key)
+	if page2[0].Key != "b/1.txt" {
+		t.Fatalf("expected b/1.txt, got %s", page2[0].Key)
 	}
 }

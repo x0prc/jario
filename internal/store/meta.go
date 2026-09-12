@@ -113,23 +113,6 @@ func (m *MetaStore) DeleteObject(bucket, key string) error {
 	return ErrNoKey
 }
 
-// ListObjects returns metadata for all objects in bucket matching prefix.
-// Sorted by key for S3 compatibility.
-func (m *MetaStore) ListObjects(bucket, prefix string) []ObjectMeta {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	var out []ObjectMeta
-	if objs, ok := m.objects[bucket]; ok {
-		for k, v := range objs {
-			if prefix == "" || strings.HasPrefix(k, prefix) {
-				out = append(out, *v)
-			}
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
-	}
-	return out
-}
-
 // ListObjectsPaged returns a page of objects matching prefix, sorted by key.
 // startAfter is exclusive (results begin after this key). maxKeys limits results.
 // Returns the page and whether more results exist (nextContinuationToken = first key of next page).
@@ -187,20 +170,4 @@ func (m *MetaStore) MarshalJSON() ([]byte, error) {
 		"buckets": m.buckets,
 		"objects": m.objects,
 	})
-}
-
-// UnmarshalJSON implements json.Unmarshaler for snapshot restoration.
-func (m *MetaStore) UnmarshalJSON(data []byte) error {
-	var v struct {
-		Buckets map[string]*Bucket                `json:"buckets"`
-		Objects map[string]map[string]*ObjectMeta `json:"objects"`
-	}
-	if err := json.Unmarshal(data, &v); err != nil {
-		return err
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.buckets = v.Buckets
-	m.objects = v.Objects
-	return nil
 }
