@@ -18,6 +18,7 @@ type Handler struct {
 	st        *store.Store
 	accessKey string
 	secretKey string
+	joiner    Joiner // nil disables /internal/join
 }
 
 // NewHandler creates an S3 handler with the given credentials.
@@ -25,8 +26,14 @@ func NewHandler(st *store.Store, accessKey, secretKey string) http.Handler {
 	return &Handler{st: st, accessKey: accessKey, secretKey: secretKey}
 }
 
-// ServeHTTP authenticates, then routes the request.
+// ServeHTTP routes operator endpoints directly, everything else
+// behind SigV4 auth.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Operator endpoints bypass SigV4 — firewall them in production.
+	if strings.HasPrefix(r.URL.Path, "/internal/") {
+		h.routeInternal(w, r)
+		return
+	}
 	if !h.verifySigV4(r) {
 		h.s3Error(w, "AccessDenied", "access denied")
 		return

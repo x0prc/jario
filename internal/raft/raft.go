@@ -5,6 +5,7 @@ package raft
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -68,6 +69,16 @@ func (n *RaftNode) Bootstrap() error {
 		},
 	}
 	return n.raft.BootstrapCluster(cfg).Error()
+}
+
+// AddVoter admits a node to the cluster. Only the leader can do this;
+// callers that hit a follower get store.ErrNotLeader.
+func (n *RaftNode) AddVoter(id, addr string) error {
+	err := n.raft.AddVoter(raft.ServerID(id), raft.ServerAddress(addr), 0, 10*time.Second).Error()
+	if errors.Is(err, raft.ErrNotLeader) {
+		return store.ErrNotLeader
+	}
+	return err
 }
 
 // Apply replicates a metadata operation. Blocks until committed.

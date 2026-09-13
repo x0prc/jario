@@ -21,6 +21,7 @@ import (
 //	access_key = "minioadmin"
 //	secret_key = "minioadmin"
 //	bootstrap = false
+//	join = ""
 type Config struct {
 	DataDir   string `toml:"data_dir"`
 	Listen    string `toml:"listen"`
@@ -31,6 +32,7 @@ type Config struct {
 	AccessKey string `toml:"access_key"`
 	SecretKey string `toml:"secret_key"`
 	Bootstrap bool   `toml:"bootstrap"`
+	Join      string `toml:"join"`
 }
 
 // Default returns the zero-config dev defaults (same as flag defaults).

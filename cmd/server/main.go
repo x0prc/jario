@@ -29,6 +29,7 @@ func main() {
 	accessKey := flag.String("access-key", "minioadmin", "S3 access key for SigV4 auth")
 	secretKey := flag.String("secret-key", "minioadmin", "S3 secret key for SigV4 auth")
 	bootstrap := flag.Bool("bootstrap", false, "bootstrap a new single-node Raft cluster (first run only)")
+	join := flag.String("join", "", "HTTP address of an existing node to join (e.g. http://node1:9000)")
 	flag.Parse()
 
 	// Precedence: defaults < config file < explicitly-set flags.
@@ -57,8 +58,14 @@ func main() {
 			cfg.SecretKey = *secretKey
 		case "bootstrap":
 			cfg.Bootstrap = *bootstrap
+		case "join":
+			cfg.Join = *join
 		}
 	})
+
+	if cfg.Bootstrap && cfg.Join != "" {
+		log.Fatal("--bootstrap and --join are mutually exclusive")
+	}
 
 	// Shared metadata store — Raft FSM and Store both reference this.
 	meta := store.NewMetaStore()
@@ -84,6 +91,20 @@ func main() {
 		}
 	}
 
+	// Join an existing cluster: ask it to admit us, retrying until it does.
+	// Our Raft node picks up the replicated configuration automatically.
+	if cfg.Join != "" {
+		for {
+			err := api.RequestJoin(cfg.Join, cfg.NodeID, cfg.RaftAddr)
+			if err == nil {
+				log.Printf("joined cluster via %s", cfg.Join)
+				break
+			}
+			log.Printf("join failed (%v), retrying...", err)
+			time.Sleep(2 * time.Second)
+		}
+	}
+
 	// Wait for leader election (single-node bootstraps instantly).
 	time.Sleep(500 * time.Millisecond)
 	if !raftNode.IsLeader() {
@@ -92,6 +113,10 @@ func main() {
 
 	// HTTP server.
 	handler := api.NewHandler(st, cfg.AccessKey, cfg.SecretKey)
+	// Admit joiners into the Raft cluster.
+	if h, ok := handler.(interface{ SetJoiner(api.Joiner) }); ok {
+		h.SetJoiner(raftNode)
+	}
 	srv := &http.Server{
 		Addr:         cfg.Listen,
 		Handler:      handler,
