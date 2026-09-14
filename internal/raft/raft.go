@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/c0ldheat/jario/internal/store"
 	"github.com/hashicorp/raft"
+	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
 )
 
 // Op is an alias for store.RaftOp — the metadata mutation replicated through Raft.
@@ -46,13 +48,13 @@ func New(nodeID, raftDir, bind string, meta *store.MetaStore) (*RaftNode, error)
 		return nil, fmt.Errorf("raft snapshots: %w", err)
 	}
 
-	stable := raft.NewInmemStore()
-	logStore, err := raft.NewLogCache(512, stable)
+	dbPath := filepath.Join(raftDir, "raft.db")
+	boltDB, err := raftboltdb.New(raftboltdb.Options{Path: dbPath})
 	if err != nil {
-		return nil, fmt.Errorf("raft log store: %w", err)
+		return nil, fmt.Errorf("raft bolt db: %w", err)
 	}
 
-	r, err := raft.NewRaft(config, fsm, logStore, stable, snapshots, transport)
+	r, err := raft.NewRaft(config, fsm, boltDB, boltDB, snapshots, transport)
 	if err != nil {
 		return nil, fmt.Errorf("raft new: %w", err)
 	}
