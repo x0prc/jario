@@ -65,6 +65,17 @@ func (m *MetaStore) DeleteBucket(name string) error {
 	return nil
 }
 
+// GetBucket returns the named bucket, or ErrNoBucket if it doesn't exist.
+func (m *MetaStore) GetBucket(name string) (Bucket, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	b, ok := m.buckets[name]
+	if !ok {
+		return Bucket{}, ErrNoBucket
+	}
+	return *b, nil
+}
+
 // ListBuckets returns all buckets, unordered.
 func (m *MetaStore) ListBuckets() []Bucket {
 	m.mu.RLock()

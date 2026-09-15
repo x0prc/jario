@@ -78,9 +78,21 @@ func (h *Handler) handleBucket(w http.ResponseWriter, r *http.Request, bucket st
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodGet:
 		h.listObjectsV2(w, r, bucket)
+	case http.MethodHead:
+		h.headBucket(w, bucket)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+// headBucket handles HEAD /{bucket} — returns 200 if the bucket exists,
+// 404 with NoSuchBucket otherwise.
+func (h *Handler) headBucket(w http.ResponseWriter, bucket string) {
+	if _, err := h.st.GetBucket(bucket); err != nil {
+		h.storeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (h *Handler) listBuckets(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +108,11 @@ func (h *Handler) listBuckets(w http.ResponseWriter, r *http.Request) {
 
 // listObjectsV2 handles GET /{bucket}?list-type=2 with pagination.
 func (h *Handler) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) {
+	if _, err := h.st.GetBucket(bucket); err != nil {
+		h.storeError(w, err)
+		return
+	}
+
 	prefix := r.URL.Query().Get("prefix")
 	startAfter := r.URL.Query().Get("start-after")
 	if ct := r.URL.Query().Get("continuation-token"); ct != "" {

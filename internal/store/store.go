@@ -107,6 +107,11 @@ func (s *Store) DeleteBucket(name string) error {
 	return s.raftApply(RaftOp{Kind: "delete_bucket", Bucket: name})
 }
 
+// GetBucket returns the named bucket, or ErrNoBucket if it doesn't exist.
+func (s *Store) GetBucket(name string) (Bucket, error) {
+	return s.meta.GetBucket(name)
+}
+
 // ListBuckets returns all buckets, unordered.
 func (s *Store) ListBuckets() []Bucket {
 	return s.meta.ListBuckets()

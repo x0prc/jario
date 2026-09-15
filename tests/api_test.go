@@ -326,3 +326,56 @@ func TestSigV4MissingHeader(t *testing.T) {
 		t.Fatalf("expected 403, got %d", rec.Code)
 	}
 }
+
+// --- error codes ---
+
+func TestHeadBucketExists(t *testing.T) {
+	h, st := newAPIHandler(t)
+	st.CreateBucket("exists")
+	req := authReq("HEAD", "/exists", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestHeadBucketNoSuchBucket(t *testing.T) {
+	h, _ := newAPIHandler(t)
+	req := authReq("HEAD", "/nope", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "NoSuchBucket") {
+		t.Fatalf("expected NoSuchBucket, got %s", rec.Body.String())
+	}
+}
+
+func TestListObjectsNoSuchBucket(t *testing.T) {
+	h, _ := newAPIHandler(t)
+	req := authReq("GET", "/nope?list-type=2", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "NoSuchBucket") {
+		t.Fatalf("expected NoSuchBucket, got %s", rec.Body.String())
+	}
+}
+
+func TestListBucketsEmptyReturnsCorrectXML(t *testing.T) {
+	h, _ := newAPIHandler(t)
+	req := authReq("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "ListAllMyBucketsResult") {
+		t.Fatalf("expected ListAllMyBucketsResult XML, got %s", body)
+	}
+}
