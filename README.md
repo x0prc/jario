@@ -4,30 +4,51 @@ data and memory containerisation for models
 
 ## features
 
-- **S3-compatible API** — bucket ops, object ops, SigV4 auth (multipart deferred to Task 8)
-- **single-node or distributed** — same binary, zero config for dev, Raft for clusters
+- **S3-compatible API** — bucket ops, object ops, multipart uploads, SigV4 auth
+- **single-node or distributed** — same binary, `--bootstrap` for dev, `--join` for clusters
 - **plain replication** — no erasure coding knobs, no healing daemons, no KES
 - **content-addressed blobs** — deduplication free, idempotent writes
 - **embedded Raft** — metadata consensus without external etcd/consul
+- **persistent Raft stores** — BoltDB-backed log + stable; cluster state survives restarts
 - **TLS optional** — plain HTTP for dev, `--tls-cert`/`--tls-key` for prod
 - **TOML config** — one file, flags override
 
-## performance
+## quick start
 
-- content-addressed storage: O(1) writes, idempotent by sha256
-- in-memory metadata: O(1) bucket/object lookups
-- no external DB, no external consensus service
-- single binary, single data dir
+```bash
+# single-node dev
+go run ./cmd/server --bootstrap
+
+# cluster: node 1 bootstraps, node 2 joins
+go run ./cmd/server --node-id node1 --bootstrap
+go run ./cmd/server --node-id node2 --join http://node1:9000
+```
+
+## config
+
+Flags, TOML file, or both. Flags override the file.
+
+```toml
+data_dir   = "./data"
+listen     = ":9000"
+node_id    = "node1"
+raft_addr  = "localhost:9090"
+access_key = "minioadmin"
+secret_key = "minioadmin"
+bootstrap  = false
+join       = ""
+```
 
 ## tests
 
 ```bash
-go test ./...
+go test ./tests/ -count=1
 ```
 
 All tests live in `tests/` (black-box, one package):
 
-- store — bucket CRUD, object CRUD, prefix listing, pagination
-- api — bucket/object ops, S3 XML errors, SigV4 auth, ListObjectsV2 pagination
-- raft — single-node apply, snapshot/restore
-- config — defaults, file load, missing-file error
+- **api** — bucket/object ops, HeadBucket, NoSuchBucket errors, SigV4, ListObjectsV2 pagination
+- **multipart** — full create/upload/complete cycle, abort, list parts, list uploads, error paths
+- **raft** — single-node apply, snapshot/restore, join endpoint
+- **store** — bucket CRUD, object CRUD, prefix listing, pagination
+- **config** — defaults, file load, missing-file error
