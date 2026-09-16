@@ -34,7 +34,7 @@ func (h *Handler) s3Error(w http.ResponseWriter, code, msg string) {
 	switch code {
 	case "BucketAlreadyExists":
 		status = http.StatusConflict
-	case "NoSuchBucket", "NoSuchKey":
+	case "NoSuchBucket", "NoSuchKey", "InvalidUploadID":
 		status = http.StatusNotFound
 	case "AccessDenied":
 		status = http.StatusForbidden
@@ -55,6 +55,8 @@ func (h *Handler) storeError(w http.ResponseWriter, err error) {
 		code = "NoSuchBucket"
 	case errors.Is(err, store.ErrNoKey):
 		code = "NoSuchKey"
+	case errors.Is(err, store.ErrInvalidUploadID):
+		code = "InvalidUploadID"
 	}
 	h.s3Error(w, code, err.Error())
 }
@@ -92,4 +94,52 @@ type listBucketResult struct {
 	IsTruncated           bool          `xml:"IsTruncated"`
 	NextContinuationToken string        `xml:"NextContinuationToken,omitempty"`
 	Contents              []objectEntry `xml:"Contents"`
+}
+
+// --- Multipart XML types ---
+
+type initiateMultipartUploadResult struct {
+	XMLName  xml.Name `xml:"InitiateMultipartUploadResult"`
+	Xmlns    string   `xml:"xmlns,attr"`
+	Bucket   string   `xml:"Bucket"`
+	Key      string   `xml:"Key"`
+	UploadID string   `xml:"UploadId"`
+}
+
+type completeMultipartUploadResult struct {
+	XMLName xml.Name `xml:"CompleteMultipartUploadResult"`
+	Xmlns   string   `xml:"xmlns,attr"`
+	Location string  `xml:"Location"`
+	Bucket   string  `xml:"Bucket"`
+	Key      string  `xml:"Key"`
+	ETag     string  `xml:"ETag"`
+}
+
+type listPartsResult struct {
+	XMLName  xml.Name             `xml:"ListPartsResult"`
+	Xmlns    string               `xml:"xmlns,attr"`
+	Bucket   string               `xml:"Bucket"`
+	Key      string               `xml:"Key"`
+	UploadID string               `xml:"UploadId"`
+	Parts    []listPartsPartEntry `xml:"Part"`
+}
+
+type listPartsPartEntry struct {
+	PartNumber   int    `xml:"PartNumber"`
+	LastModified string `xml:"LastModified"`
+	ETag         string `xml:"ETag"`
+	Size         int64  `xml:"Size"`
+}
+
+type listMultipartUploadsResult struct {
+	XMLName xml.Name                    `xml:"ListMultipartUploadsResult"`
+	Xmlns   string                      `xml:"xmlns,attr"`
+	Bucket  string                      `xml:"Bucket"`
+	Uploads []listMultipartUploadEntry  `xml:"Upload"`
+}
+
+type listMultipartUploadEntry struct {
+	Key       string `xml:"Key"`
+	UploadID  string `xml:"UploadId"`
+	Initiated string `xml:"Initiated"`
 }

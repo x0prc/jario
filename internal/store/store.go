@@ -20,7 +20,8 @@ var (
 	ErrBucketExists = fmt.Errorf("BucketAlreadyExists")
 	ErrNoBucket     = fmt.Errorf("NoSuchBucket")
 	ErrNoKey        = fmt.Errorf("NoSuchKey")
-	ErrNotLeader    = fmt.Errorf("not the Raft leader")
+	ErrNotLeader       = fmt.Errorf("not the Raft leader")
+	ErrInvalidUploadID = fmt.Errorf("InvalidUploadID")
 )
 
 // Rafter is the interface Store uses to replicate metadata through Raft.
@@ -41,21 +42,22 @@ type RaftOp struct {
 
 // Store is the storage engine. Owns blob dir and metadata index.
 type Store struct {
-	dataDir string
-	meta    *MetaStore
-	raft    Rafter // nil in standalone mode (no replication)
+	dataDir   string
+	meta      *MetaStore
+	raft      Rafter // nil in standalone mode (no replication)
+	multipart *multipartState
 }
 
 // New creates a Store rooted at dataDir with its own MetaStore.
 func New(dataDir string) *Store {
 	os.MkdirAll(filepath.Join(dataDir, "blobs"), 0755)
-	return &Store{dataDir: dataDir, meta: NewMetaStore()}
+	return &Store{dataDir: dataDir, meta: NewMetaStore(), multipart: newMultipartState()}
 }
 
 // NewWithMeta creates a Store sharing the given MetaStore (for Raft wiring).
 func NewWithMeta(dataDir string, meta *MetaStore) *Store {
 	os.MkdirAll(filepath.Join(dataDir, "blobs"), 0755)
-	return &Store{dataDir: dataDir, meta: meta}
+	return &Store{dataDir: dataDir, meta: meta, multipart: newMultipartState()}
 }
 
 // SetRaft wires the store to a Raft node for metadata replication.

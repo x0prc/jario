@@ -1,9 +1,10 @@
 // Package api implements the S3-compatible HTTP handler.
-// Routes bucket ops, object ops, and (later) multipart uploads
-// to the store layer, behind SigV4 auth.
+// Routes bucket ops, object ops, and multipart uploads to the
+// store layer, behind SigV4 auth.
 package api
 
 import (
+	"encoding/xml"
 	"io"
 	"net/http"
 	"strconv"
@@ -63,6 +64,11 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 // --- bucket ops ---
 
 func (h *Handler) handleBucket(w http.ResponseWriter, r *http.Request, bucket string) {
+	// GET /{bucket}?uploads — list multipart uploads.
+	if r.Method == http.MethodGet && r.URL.Query().Has("uploads") {
+		h.listMultipartUploads(w, r, bucket)
+		return
+	}
 	switch r.Method {
 	case http.MethodPut:
 		if err := h.st.CreateBucket(bucket); err != nil {
@@ -152,17 +158,36 @@ func (h *Handler) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket s
 // --- object ops ---
 
 func (h *Handler) handleObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	switch r.Method {
-	case http.MethodPut:
-		h.putObject(w, r, bucket, key)
-	case http.MethodGet:
-		h.getObject(w, r, bucket, key)
-	case http.MethodHead:
-		h.headObject(w, r, bucket, key)
-	case http.MethodDelete:
-		h.deleteObject(w, r, bucket, key)
+	q := r.URL.Query()
+	switch {
+	// POST /{bucket}/{key}?uploads — initiate multipart upload.
+	case r.Method == http.MethodPost && q.Has("uploads"):
+		h.createMultipartUpload(w, r, bucket, key)
+	// PUT /{bucket}/{key}?uploadId=...&partNumber=... — upload a part.
+	case r.Method == http.MethodPut && q.Has("uploadId") && q.Has("partNumber"):
+		h.uploadPart(w, r, bucket, key)
+	// POST /{bucket}/{key}?uploadId=... — complete multipart upload.
+	case r.Method == http.MethodPost && q.Has("uploadId"):
+		h.completeMultipartUpload(w, r, bucket, key)
+	// GET /{bucket}/{key}?uploadId=... — list parts.
+	case r.Method == http.MethodGet && q.Has("uploadId"):
+		h.listParts(w, r, bucket, key)
+	// DELETE /{bucket}/{key}?uploadId=... — abort multipart upload.
+	case r.Method == http.MethodDelete && q.Has("uploadId"):
+		h.abortMultipartUpload(w, r, bucket, key)
 	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		switch r.Method {
+		case http.MethodPut:
+			h.putObject(w, r, bucket, key)
+		case http.MethodGet:
+			h.getObject(w, r, bucket, key)
+		case http.MethodHead:
+			h.headObject(w, r, bucket, key)
+		case http.MethodDelete:
+			h.deleteObject(w, r, bucket, key)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
 	}
 }
 
@@ -202,5 +227,108 @@ func (h *Handler) headObject(w http.ResponseWriter, r *http.Request, bucket, key
 func (h *Handler) deleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	// S3 semantics: DELETE is idempotent — 204 even if the key never existed.
 	h.st.DeleteObject(bucket, key)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- multipart ops ---
+
+func (h *Handler) createMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	uploadID, err := h.st.NewMultipartUpload(bucket, key)
+	if err != nil {
+		h.storeError(w, err)
+		return
+	}
+	writeXML(w, initiateMultipartUploadResult{
+		Xmlns:    s3xmlns,
+		Bucket:   bucket,
+		Key:      key,
+		UploadID: uploadID,
+	})
+}
+
+func (h *Handler) uploadPart(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	q := r.URL.Query()
+	uploadID := q.Get("uploadId")
+	partNum, err := strconv.Atoi(q.Get("partNumber"))
+	if err != nil || partNum < 1 || partNum > 10000 {
+		h.s3Error(w, "InvalidArgument", "partNumber must be between 1 and 10000")
+		return
+	}
+	etag, err := h.st.UploadPart(bucket, key, uploadID, partNum, r.Body)
+	if err != nil {
+		h.storeError(w, err)
+		return
+	}
+	w.Header().Set("ETag", `"`+etag+`"`)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) completeMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	uploadID := r.URL.Query().Get("uploadId")
+	var req struct {
+		Parts []store.CompletedPart `xml:"Part"`
+	}
+	if err := xml.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.s3Error(w, "MalformedXML", "invalid CompleteMultipartUpload body")
+		return
+	}
+	if len(req.Parts) == 0 {
+		h.s3Error(w, "MalformedXML", "At least one part must be specified")
+		return
+	}
+	if err := h.st.CompleteMultipartUpload(bucket, key, uploadID, req.Parts); err != nil {
+		h.storeError(w, err)
+		return
+	}
+	writeXML(w, completeMultipartUploadResult{
+		Xmlns:   s3xmlns,
+		Location: "http://" + r.Host + "/" + bucket + "/" + key,
+		Bucket:  bucket,
+		Key:     key,
+	})
+}
+
+func (h *Handler) listParts(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	uploadID := r.URL.Query().Get("uploadId")
+	parts, err := h.st.ListParts(bucket, key, uploadID)
+	if err != nil {
+		h.storeError(w, err)
+		return
+	}
+	res := listPartsResult{Xmlns: s3xmlns, Bucket: bucket, Key: key, UploadID: uploadID}
+	for _, p := range parts {
+		res.Parts = append(res.Parts, listPartsPartEntry{
+			PartNumber:   p.PartNumber,
+			LastModified: time.Now().Format(time.RFC3339),
+			ETag:         `"` + p.ETag + `"`,
+			Size:         p.Size,
+		})
+	}
+	writeXML(w, res)
+}
+
+func (h *Handler) listMultipartUploads(w http.ResponseWriter, r *http.Request, bucket string) {
+	uploads, err := h.st.ListMultipartUploads(bucket)
+	if err != nil {
+		h.storeError(w, err)
+		return
+	}
+	res := listMultipartUploadsResult{Xmlns: s3xmlns, Bucket: bucket}
+	for _, u := range uploads {
+		res.Uploads = append(res.Uploads, listMultipartUploadEntry{
+			Key:       u.Key,
+			UploadID:  u.UploadID,
+			Initiated: u.Initiated.Format(time.RFC3339),
+		})
+	}
+	writeXML(w, res)
+}
+
+func (h *Handler) abortMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	uploadID := r.URL.Query().Get("uploadId")
+	if err := h.st.AbortMultipartUpload(bucket, key, uploadID); err != nil {
+		h.storeError(w, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
