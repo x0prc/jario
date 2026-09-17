@@ -9,7 +9,8 @@ data and memory containerisation for models
 - **plain replication** — no erasure coding knobs, no healing daemons, no KES
 - **content-addressed blobs** — deduplication free, idempotent writes
 - **embedded Raft** — metadata consensus without external etcd/consul
-- **persistent Raft stores** — BoltDB-backed log + stable; cluster state survives restarts
+- **persistent storage** — BoltDB-backed Raft log/stable and bucket metadata; survives restarts
+- **per-bucket region** — `--region` flag (default: `us-east-1`)
 - **TLS optional** — plain HTTP for dev, `--tls-cert`/`--tls-key` for prod
 - **TOML config** — one file, flags override
 
@@ -37,6 +38,7 @@ access_key = "minioadmin"
 secret_key = "minioadmin"
 bootstrap  = false
 join       = ""
+region     = "us-east-1"
 ```
 
 ## tests
