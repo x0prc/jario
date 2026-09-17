@@ -6,6 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/hashicorp/raft v1.7.3
 	github.com/hashicorp/raft-boltdb/v2 v2.3.1
+	go.etcd.io/bbolt v1.3.5
 )
 
 require (
@@ -19,6 +20,5 @@ require (
 	github.com/hashicorp/golang-lru v0.5.0 // indirect
 	github.com/mattn/go-colorable v0.1.12 // indirect
 	github.com/mattn/go-isatty v0.0.14 // indirect
-	go.etcd.io/bbolt v1.3.5 // indirect
 	golang.org/x/sys v0.13.0 // indirect
 )

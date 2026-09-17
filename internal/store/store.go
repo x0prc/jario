@@ -46,12 +46,17 @@ type Store struct {
 	meta      *MetaStore
 	raft      Rafter // nil in standalone mode (no replication)
 	multipart *multipartState
+	region    string
 }
 
 // New creates a Store rooted at dataDir with its own MetaStore.
 func New(dataDir string) *Store {
 	os.MkdirAll(filepath.Join(dataDir, "blobs"), 0755)
-	return &Store{dataDir: dataDir, meta: NewMetaStore(), multipart: newMultipartState()}
+	meta, err := NewMetaStore(dataDir)
+	if err != nil {
+		panic("store new: " + err.Error())
+	}
+	return &Store{dataDir: dataDir, meta: meta, multipart: newMultipartState()}
 }
 
 // NewWithMeta creates a Store sharing the given MetaStore (for Raft wiring).
@@ -80,10 +85,6 @@ func (s *Store) raftApply(op RaftOp) error {
 // the Raft FSM (replicated writes) and raftApply (standalone mode).
 func ApplyOp(m *MetaStore, op RaftOp) error {
 	switch op.Kind {
-	case "create_bucket":
-		return m.CreateBucket(op.Bucket)
-	case "delete_bucket":
-		return m.DeleteBucket(op.Bucket)
 	case "put_object":
 		var meta ObjectMeta
 		if err := json.Unmarshal(op.Meta, &meta); err != nil {
@@ -98,15 +99,16 @@ func ApplyOp(m *MetaStore, op RaftOp) error {
 }
 
 // --- Bucket operations ---
+// Bucket CRUD is local-only — stored in BoltDB, never replicated through Raft.
 
 // CreateBucket adds a bucket. Replicated through Raft when wired.
 func (s *Store) CreateBucket(name string) error {
-	return s.raftApply(RaftOp{Kind: "create_bucket", Bucket: name})
+	return s.meta.CreateBucket(name)
 }
 
 // DeleteBucket removes a bucket and all its object metadata.
 func (s *Store) DeleteBucket(name string) error {
-	return s.raftApply(RaftOp{Kind: "delete_bucket", Bucket: name})
+	return s.meta.DeleteBucket(name)
 }
 
 // GetBucket returns the named bucket, or ErrNoBucket if it doesn't exist.

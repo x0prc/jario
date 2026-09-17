@@ -26,64 +26,78 @@ type ObjectMeta struct {
 	VersionID   string
 }
 
-// MetaStore holds all bucket and object metadata.
-// All mutations require a write lock; reads use RLock.
+// MetaStore holds bucket metadata (BoltDB) and object metadata (in-memory).
+// Bucket CRUD goes through BoltDB for persistence. Object metadata is
+// replicated through Raft and kept in-memory for fast access.
 type MetaStore struct {
-	mu      sync.RWMutex
-	buckets map[string]*Bucket
-	objects map[string]map[string]*ObjectMeta // bucket → key → meta
+	mu       sync.RWMutex
+	buckets  *BucketDB      // persistent bucket store
+	cache    map[string]bool // fast existence check, rebuilt from BoltDB
+	objects  map[string]map[string]*ObjectMeta // bucket → key → meta
+	region   string         // default region for new buckets
 }
 
-func NewMetaStore() *MetaStore {
-	return &MetaStore{
-		buckets: make(map[string]*Bucket),
-		objects: make(map[string]map[string]*ObjectMeta),
+// NewMetaStore creates a MetaStore backed by BoltDB at dataDir.
+func NewMetaStore(dataDir string) (*MetaStore, error) {
+	bdb, err := OpenBucketDB(dataDir)
+	if err != nil {
+		return nil, err
 	}
+	// Build in-memory cache from BoltDB.
+	cache := make(map[string]bool)
+	buckets, _ := bdb.List()
+	for _, b := range buckets {
+		cache[b.Name] = true
+	}
+	return &MetaStore{
+		buckets: bdb,
+		cache:   cache,
+		objects: make(map[string]map[string]*ObjectMeta),
+	}, nil
+}
+
+// Region returns the default region for new buckets.
+func (m *MetaStore) Region() string {
+	return m.region
+}
+
+// SetRegion sets the default region for new buckets.
+func (m *MetaStore) SetRegion(r string) {
+	m.region = r
 }
 
 // CreateBucket adds a bucket. ErrBucketExists on duplicate.
 func (m *MetaStore) CreateBucket(name string) error {
+	if err := m.buckets.Create(name, m.region); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.buckets[name]; ok {
-		return ErrBucketExists
-	}
-	m.buckets[name] = &Bucket{Name: name, CreatedAt: time.Now()}
+	m.cache[name] = true
 	m.objects[name] = make(map[string]*ObjectMeta)
 	return nil
 }
 
 // DeleteBucket removes a bucket and all its object metadata.
 func (m *MetaStore) DeleteBucket(name string) error {
+	if err := m.buckets.Delete(name); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.buckets[name]; !ok {
-		return ErrNoBucket
-	}
-	delete(m.buckets, name)
+	delete(m.cache, name)
 	delete(m.objects, name)
 	return nil
 }
 
 // GetBucket returns the named bucket, or ErrNoBucket if it doesn't exist.
 func (m *MetaStore) GetBucket(name string) (Bucket, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	b, ok := m.buckets[name]
-	if !ok {
-		return Bucket{}, ErrNoBucket
-	}
-	return *b, nil
+	return m.buckets.Get(name)
 }
 
 // ListBuckets returns all buckets, unordered.
 func (m *MetaStore) ListBuckets() []Bucket {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make([]Bucket, 0, len(m.buckets))
-	for _, b := range m.buckets {
-		out = append(out, *b)
-	}
+	out, _ := m.buckets.List()
 	return out
 }
 
@@ -92,7 +106,7 @@ func (m *MetaStore) ListBuckets() []Bucket {
 func (m *MetaStore) PutObject(bucket, key string, meta ObjectMeta) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.buckets[bucket]; !ok {
+	if !m.cache[bucket] {
 		return ErrNoBucket
 	}
 	m.objects[bucket][key] = &meta
@@ -126,7 +140,6 @@ func (m *MetaStore) DeleteObject(bucket, key string) error {
 
 // ListObjectsPaged returns a page of objects matching prefix, sorted by key.
 // startAfter is exclusive (results begin after this key). maxKeys limits results.
-// Returns the page and whether more results exist (nextContinuationToken = first key of next page).
 func (m *MetaStore) ListObjectsPaged(bucket, prefix, startAfter string, maxKeys int) (objs []ObjectMeta, nextToken string) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -150,26 +163,46 @@ func (m *MetaStore) ListObjectsPaged(bucket, prefix, startAfter string, maxKeys 
 
 // --- Raft snapshot support ---
 
-// Snapshot serializes the store to w for Raft persistence.
+// Snapshot serializes object metadata to w for Raft persistence.
+// Bucket metadata lives in BoltDB and is not included in snapshots.
 func (m *MetaStore) Snapshot(w io.Writer) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return json.NewEncoder(w).Encode(m)
+	return json.NewEncoder(w).Encode(map[string]interface{}{
+		"objects": m.objects,
+	})
 }
 
-// Restore loads state from a Raft snapshot.
+// Restore loads object metadata from a Raft snapshot.
+// Bucket metadata is re-read from BoltDB into the in-memory cache.
 func (m *MetaStore) Restore(r io.Reader) error {
 	var v struct {
-		Buckets map[string]*Bucket                `json:"buckets"`
 		Objects map[string]map[string]*ObjectMeta `json:"objects"`
 	}
 	if err := json.NewDecoder(r).Decode(&v); err != nil {
 		return err
 	}
+
+	// Rebuild bucket cache from BoltDB.
+	buckets, _ := m.buckets.List()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.buckets = v.Buckets
-	m.objects = v.Objects
+	m.cache = make(map[string]bool, len(buckets))
+	for _, b := range buckets {
+		m.cache[b.Name] = true
+	}
+
+	// Merge objects: add keys not in snapshot, keep snapshot's keys.
+	if v.Objects != nil {
+		for b, objs := range v.Objects {
+			if m.objects[b] == nil {
+				m.objects[b] = make(map[string]*ObjectMeta)
+			}
+			for k, meta := range objs {
+				m.objects[b][k] = meta
+			}
+		}
+	}
 	return nil
 }
 
@@ -178,7 +211,6 @@ func (m *MetaStore) MarshalJSON() ([]byte, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return json.Marshal(map[string]interface{}{
-		"buckets": m.buckets,
 		"objects": m.objects,
 	})
 }

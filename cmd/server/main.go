@@ -30,6 +30,7 @@ func main() {
 	secretKey := flag.String("secret-key", "minioadmin", "S3 secret key for SigV4 auth")
 	bootstrap := flag.Bool("bootstrap", false, "bootstrap a new single-node Raft cluster (first run only)")
 	join := flag.String("join", "", "HTTP address of an existing node to join (e.g. http://node1:9000)")
+	region := flag.String("region", "us-east-1", "S3 region for new buckets")
 	flag.Parse()
 
 	// Precedence: defaults < config file < explicitly-set flags.
@@ -60,6 +61,8 @@ func main() {
 			cfg.Bootstrap = *bootstrap
 		case "join":
 			cfg.Join = *join
+		case "region":
+			cfg.Region = *region
 		}
 	})
 
@@ -68,7 +71,11 @@ func main() {
 	}
 
 	// Shared metadata store — Raft FSM and Store both reference this.
-	meta := store.NewMetaStore()
+	meta, err := store.NewMetaStore(cfg.DataDir)
+	if err != nil {
+		log.Fatalf("meta store: %v", err)
+	}
+	meta.SetRegion(cfg.Region)
 
 	// Storage engine.
 	st := store.NewWithMeta(cfg.DataDir, meta)
