@@ -23,6 +23,7 @@ import (
 //	bootstrap = false
 //	join = ""
 //	region = "us-east-1"
+//	upload_max_age = "24h"
 type Config struct {
 	DataDir   string `toml:"data_dir"`
 	Listen    string `toml:"listen"`
@@ -34,7 +35,8 @@ type Config struct {
 	SecretKey string `toml:"secret_key"`
 	Bootstrap bool   `toml:"bootstrap"`
 	Join      string `toml:"join"`
-	Region    string `toml:"region"`
+	Region        string `toml:"region"`
+	UploadMaxAge  string `toml:"upload_max_age"`
 }
 
 // Default returns the zero-config dev defaults (same as flag defaults).
@@ -46,7 +48,8 @@ func Default() Config {
 		RaftAddr:  "localhost:9090",
 		AccessKey: "minioadmin",
 		SecretKey: "minioadmin",
-		Region:    "us-east-1",
+		Region:       "us-east-1",
+		UploadMaxAge: "24h",
 	}
 }
 

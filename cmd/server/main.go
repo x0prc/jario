@@ -31,6 +31,7 @@ func main() {
 	bootstrap := flag.Bool("bootstrap", false, "bootstrap a new single-node Raft cluster (first run only)")
 	join := flag.String("join", "", "HTTP address of an existing node to join (e.g. http://node1:9000)")
 	region := flag.String("region", "us-east-1", "S3 region for new buckets")
+	uploadMaxAge := flag.String("upload-max-age", "24h", "max age for incomplete multipart uploads before auto-abort")
 	flag.Parse()
 
 	// Precedence: defaults < config file < explicitly-set flags.
@@ -63,6 +64,8 @@ func main() {
 			cfg.Join = *join
 		case "region":
 			cfg.Region = *region
+		case "upload-max-age":
+			cfg.UploadMaxAge = *uploadMaxAge
 		}
 	})
 
@@ -141,6 +144,21 @@ func main() {
 		} else {
 			log.Printf("jario listening on %s", cfg.Listen)
 			errCh <- srv.ListenAndServe()
+		}
+	}()
+
+	// Background reaper: abort stale incomplete multipart uploads.
+	maxAge, err := time.ParseDuration(cfg.UploadMaxAge)
+	if err != nil {
+		log.Fatalf("invalid upload-max-age %q: %v", cfg.UploadMaxAge, err)
+	}
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			if n := st.AbortStaleUploads(maxAge); n > 0 {
+				log.Printf("reaper: aborted %d stale multipart uploads", n)
+			}
 		}
 	}()
 

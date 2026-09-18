@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/c0ldheat/jario/internal/api"
 	"github.com/c0ldheat/jario/internal/store"
@@ -229,4 +230,48 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(buf[i:])
+}
+
+func TestAbortStaleUploads(t *testing.T) {
+	h, st := newMultipartHandler(t)
+	st.CreateBucket("b")
+
+	// Create two uploads.
+	id1 := initiate(t, h, "b", "stale1.dat")
+	id2 := initiate(t, h, "b", "stale2.dat")
+
+	// Abort uploads older than 0s — both should be cleaned up.
+	n := st.AbortStaleUploads(0)
+	if n != 2 {
+		t.Fatalf("expected 2 aborted, got %d", n)
+	}
+
+	// Both uploads should be gone.
+	req := authReq("GET", "/b?uploads", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if strings.Contains(body, id1) || strings.Contains(body, id2) {
+		t.Fatalf("uploads should be gone after stale abort: %s", body)
+	}
+}
+
+func TestAbortStaleUploadsNoneStale(t *testing.T) {
+	h, st := newMultipartHandler(t)
+	st.CreateBucket("b")
+	initiate(t, h, "b", "fresh.dat")
+
+	// Nothing is stale if maxAge is 24h.
+	n := st.AbortStaleUploads(24 * time.Hour)
+	if n != 0 {
+		t.Fatalf("expected 0 aborted, got %d", n)
+	}
+
+	// Upload should still be there.
+	req := authReq("GET", "/b?uploads", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), "fresh.dat") {
+		t.Fatalf("fresh upload should still exist: %s", rec.Body.String())
+	}
 }

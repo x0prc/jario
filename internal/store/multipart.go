@@ -270,6 +270,28 @@ func (s *Store) cleanupUpload(uploadID string) {
 	s.multipart.mu.Unlock()
 }
 
+// AbortStaleUploads removes all uploads older than maxAge.
+// Returns the number of aborted uploads.
+func (s *Store) AbortStaleUploads(maxAge time.Duration) int {
+	cutoff := time.Now().Add(-maxAge)
+	s.multipart.mu.Lock()
+	var stale []string
+	for id, u := range s.multipart.uploads {
+		u.mu.Lock()
+		initiated := u.initiated
+		u.mu.Unlock()
+		if initiated.Before(cutoff) {
+			stale = append(stale, id)
+		}
+	}
+	s.multipart.mu.Unlock()
+
+	for _, id := range stale {
+		s.cleanupUpload(id)
+	}
+	return len(stale)
+}
+
 // randomHex returns n bytes of hex-encoded randomness for upload IDs.
 func randomHex(n int) string {
 	b := make([]byte, n)
