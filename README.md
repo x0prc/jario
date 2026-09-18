@@ -11,6 +11,7 @@ data and memory containerisation for models
 - **embedded Raft** — metadata consensus without external etcd/consul
 - **persistent storage** — BoltDB-backed Raft log/stable and bucket metadata; survives restarts
 - **per-bucket region** — `--region` flag (default: `us-east-1`)
+- **multipart upload cleanup** — background reaper aborts stale incomplete uploads (`--upload-max-age`, default 24h)
 - **TLS optional** — plain HTTP for dev, `--tls-cert`/`--tls-key` for prod
 - **TOML config** — one file, flags override
 
@@ -39,6 +40,7 @@ secret_key = "minioadmin"
 bootstrap  = false
 join       = ""
 region     = "us-east-1"
+upload_max_age = "24h"
 ```
 
 ## tests
