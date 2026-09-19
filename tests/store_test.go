@@ -53,14 +53,17 @@ func TestStoreDeleteBucketNonexistent(t *testing.T) {
 func TestStorePutGetObject(t *testing.T) {
 	s := store.New(t.TempDir())
 	s.CreateBucket("test-bucket")
-	etag, err := s.PutObject("test-bucket", "hello.txt", strings.NewReader("hello world"))
+	etag, vid, err := s.PutObject("test-bucket", "hello.txt", strings.NewReader("hello world"))
 	if err != nil {
 		t.Fatalf("PutObject: %v", err)
 	}
 	if etag == "" {
 		t.Fatal("expected non-empty etag")
 	}
-	rc, meta, err := s.GetObject("test-bucket", "hello.txt")
+	if vid == "" {
+		t.Fatal("expected non-empty version ID")
+	}
+	rc, meta, err := s.GetObject("test-bucket", "hello.txt", "")
 	if err != nil {
 		t.Fatalf("GetObject: %v", err)
 	}
@@ -72,11 +75,14 @@ func TestStorePutGetObject(t *testing.T) {
 	if meta.Size != 11 {
 		t.Fatalf("expected size 11, got %d", meta.Size)
 	}
+	if meta.VersionID != vid {
+		t.Fatalf("expected version %s, got %s", vid, meta.VersionID)
+	}
 }
 
 func TestStorePutObjectNoBucket(t *testing.T) {
 	s := store.New(t.TempDir())
-	_, err := s.PutObject("no-bucket", "hello.txt", strings.NewReader("hello"))
+	_, _, err := s.PutObject("no-bucket", "hello.txt", strings.NewReader("hello"))
 	if !errors.Is(err, store.ErrNoBucket) {
 		t.Fatalf("expected ErrNoBucket, got %v", err)
 	}
@@ -85,7 +91,7 @@ func TestStorePutObjectNoBucket(t *testing.T) {
 func TestStoreGetObjectNonexistent(t *testing.T) {
 	s := store.New(t.TempDir())
 	s.CreateBucket("test-bucket")
-	_, _, err := s.GetObject("test-bucket", "no-key")
+	_, _, err := s.GetObject("test-bucket", "no-key", "")
 	if !errors.Is(err, store.ErrNoKey) {
 		t.Fatalf("expected ErrNoKey, got %v", err)
 	}
@@ -94,13 +100,59 @@ func TestStoreGetObjectNonexistent(t *testing.T) {
 func TestStoreDeleteObject(t *testing.T) {
 	s := store.New(t.TempDir())
 	s.CreateBucket("test-bucket")
-	s.PutObject("test-bucket", "hello.txt", strings.NewReader("hello"))
-	if err := s.DeleteObject("test-bucket", "hello.txt"); err != nil {
+	_, vid, _ := s.PutObject("test-bucket", "hello.txt", strings.NewReader("hello"))
+	// Delete with specific version to permanently remove the object.
+	_, err := s.DeleteObject("test-bucket", "hello.txt", vid)
+	if err != nil {
 		t.Fatalf("DeleteObject: %v", err)
 	}
-	_, _, err := s.GetObject("test-bucket", "hello.txt")
+	_, _, err = s.GetObject("test-bucket", "hello.txt", "")
 	if !errors.Is(err, store.ErrNoKey) {
 		t.Fatal("expected ErrNoKey after delete")
+	}
+}
+
+func TestStoreDeleteObjectCreatesMarker(t *testing.T) {
+	s := store.New(t.TempDir())
+	s.CreateBucket("test-bucket")
+	s.PutObject("test-bucket", "hello.txt", strings.NewReader("hello"))
+	// DELETE without version ID creates a delete marker.
+	_, err := s.DeleteObject("test-bucket", "hello.txt", "")
+	if err != nil {
+		t.Fatalf("DeleteObject: %v", err)
+	}
+	// Current version is now a delete marker — GetObject returns ErrNoKey.
+	_, _, err = s.GetObject("test-bucket", "hello.txt", "")
+	if !errors.Is(err, store.ErrNoKey) {
+		t.Fatal("expected ErrNoKey when current version is delete marker")
+	}
+}
+
+func TestStoreVersioningMultipleVersions(t *testing.T) {
+	s := store.New(t.TempDir())
+	s.CreateBucket("test-bucket")
+	_, v1, _ := s.PutObject("test-bucket", "doc.txt", strings.NewReader("v1"))
+	_, _, _ = s.PutObject("test-bucket", "doc.txt", strings.NewReader("v2"))
+	_, v3, _ := s.PutObject("test-bucket", "doc.txt", strings.NewReader("v3"))
+	// Current version is v3.
+	_, meta, _ := s.GetObject("test-bucket", "doc.txt", "")
+	if meta.VersionID != v3 {
+		t.Fatalf("expected current version %s, got %s", v3, meta.VersionID)
+	}
+	// Read specific versions.
+	_, m1, _ := s.GetObject("test-bucket", "doc.txt", v1)
+	if m1.VersionID != v1 {
+		t.Fatalf("expected version %s, got %s", v1, m1.VersionID)
+	}
+	// Check content via GetMetaVersion.
+	m1, _ = s.GetMetaVersion("test-bucket", "doc.txt", v1)
+	if m1.Size != 2 {
+		t.Fatalf("expected size 2 for v1, got %d", m1.Size)
+	}
+	// List all versions — should have 3.
+	versions, _ := s.ListObjectVersions("test-bucket", "")
+	if len(versions) != 3 {
+		t.Fatalf("expected 3 versions, got %d", len(versions))
 	}
 }
 

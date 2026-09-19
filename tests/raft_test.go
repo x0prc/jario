@@ -48,7 +48,7 @@ func TestRaftApplyPutObject(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 
-	obj, err := meta.GetObject("images", "photo.jpg")
+	obj, err := meta.GetObject("images", "photo.jpg", "")
 	if err != nil {
 		t.Fatalf("GetObject: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestRaftApplyDeleteObject(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 
-	_, err := meta.GetObject("data", "file.txt")
+	_, err := meta.GetObject("data", "file.txt", "")
 	if err == nil || !strings.Contains(err.Error(), "NoSuchKey") {
 		t.Fatalf("expected NoSuchKey, got %v", err)
 	}
@@ -102,7 +102,7 @@ func TestRaftSnapshotRestore(t *testing.T) {
 	}
 
 	// Verify restored state.
-	obj, err := newMeta.GetObject("snap-bucket", "doc.txt")
+	obj, err := newMeta.GetObject("snap-bucket", "doc.txt", "")
 	if err != nil {
 		t.Fatalf("restored GetObject: %v", err)
 	}

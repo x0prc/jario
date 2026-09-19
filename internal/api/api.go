@@ -64,9 +64,15 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 // --- bucket ops ---
 
 func (h *Handler) handleBucket(w http.ResponseWriter, r *http.Request, bucket string) {
+	q := r.URL.Query()
 	// GET /{bucket}?uploads — list multipart uploads.
-	if r.Method == http.MethodGet && r.URL.Query().Has("uploads") {
+	if r.Method == http.MethodGet && q.Has("uploads") {
 		h.listMultipartUploads(w, r, bucket)
+		return
+	}
+	// GET /{bucket}?versions — list object versions.
+	if r.Method == http.MethodGet && q.Has("versions") {
+		h.listObjectVersions(w, r, bucket)
 		return
 	}
 	switch r.Method {
@@ -192,42 +198,118 @@ func (h *Handler) handleObject(w http.ResponseWriter, r *http.Request, bucket, k
 }
 
 func (h *Handler) putObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	etag, err := h.st.PutObject(bucket, key, r.Body)
+	etag, versionID, err := h.st.PutObject(bucket, key, r.Body)
 	if err != nil {
 		h.storeError(w, err)
 		return
 	}
 	w.Header().Set("ETag", `"`+etag+`"`)
+	if versionID != "" {
+		w.Header().Set("X-Amz-Version-Id", versionID)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
 func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	rc, meta, err := h.st.GetObject(bucket, key)
+	versionID := r.URL.Query().Get("versionId")
+	rc, meta, err := h.st.GetObject(bucket, key, versionID)
 	if err != nil {
 		h.storeError(w, err)
+		return
+	}
+	// If the current version is a delete marker, return 404 with header.
+	if meta.IsDeleteMarker {
+		rc.Close()
+		w.Header().Set("X-Amz-Delete-Marker", "true")
+		if meta.VersionID != "" {
+			w.Header().Set("X-Amz-Version-Id", meta.VersionID)
+		}
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 	defer rc.Close()
 	w.Header().Set("ETag", `"`+meta.ETag+`"`)
 	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	if meta.VersionID != "" {
+		w.Header().Set("X-Amz-Version-Id", meta.VersionID)
+	}
 	io.Copy(w, rc)
 }
 
 func (h *Handler) headObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	meta, err := h.st.GetMeta(bucket, key)
+	versionID := r.URL.Query().Get("versionId")
+	var meta *store.ObjectMeta
+	var err error
+	if versionID != "" {
+		meta, err = h.st.GetMetaVersion(bucket, key, versionID)
+	} else {
+		meta, err = h.st.GetMeta(bucket, key)
+	}
 	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if meta.IsDeleteMarker {
+		w.Header().Set("X-Amz-Delete-Marker", "true")
+		if meta.VersionID != "" {
+			w.Header().Set("X-Amz-Version-Id", meta.VersionID)
+		}
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 	w.Header().Set("ETag", `"`+meta.ETag+`"`)
 	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	if meta.VersionID != "" {
+		w.Header().Set("X-Amz-Version-Id", meta.VersionID)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
 func (h *Handler) deleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	// S3 semantics: DELETE is idempotent — 204 even if the key never existed.
-	h.st.DeleteObject(bucket, key)
+	versionID := r.URL.Query().Get("versionId")
+	_, err := h.st.DeleteObject(bucket, key, versionID)
+	if err != nil {
+		h.storeError(w, err)
+		return
+	}
+	// S3 semantics: DELETE is idempotent — 204 always.
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) listObjectVersions(w http.ResponseWriter, r *http.Request, bucket string) {
+	if _, err := h.st.GetBucket(bucket); err != nil {
+		h.storeError(w, err)
+		return
+	}
+	prefix := r.URL.Query().Get("prefix")
+	versions, deleteMarkers := h.st.ListObjectVersions(bucket, prefix)
+	res := listObjectVersionsResult{
+		Xmlns:          s3xmlns,
+		Name:           bucket,
+		Prefix:         prefix,
+		KeyMarker:      r.URL.Query().Get("key-marker"),
+		VersionIdMarker: r.URL.Query().Get("version-id-marker"),
+	}
+	for _, v := range versions {
+		res.Versions = append(res.Versions, listVersionEntry{
+			Key:          v.Key,
+			VersionID:    v.VersionID,
+			IsLatest:     v.IsLatest,
+			LastModified: v.LastModified,
+			ETag:         v.ETag,
+			Size:         v.Size,
+			StorageClass: v.StorageClass,
+		})
+	}
+	for _, dm := range deleteMarkers {
+		res.DeleteMarkers = append(res.DeleteMarkers, listDeleteMarkerEntry{
+			Key:          dm.Key,
+			VersionID:    dm.VersionID,
+			IsLatest:     dm.IsLatest,
+			LastModified: dm.LastModified,
+		})
+	}
+	writeXML(w, res)
 }
 
 // --- multipart ops ---

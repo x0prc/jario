@@ -5,6 +5,7 @@ data and memory containerisation for models
 ## features
 
 - **S3-compatible API** — bucket ops, object ops, multipart uploads, SigV4 auth
+- **object versioning** — every PUT creates a new version; DELETE creates delete markers; `?versionId` and `?versions` supported
 - **single-node or distributed** — same binary, `--bootstrap` for dev, `--join` for clusters
 - **plain replication** — no erasure coding knobs, no healing daemons, no KES
 - **content-addressed blobs** — deduplication free, idempotent writes
@@ -54,5 +55,5 @@ All tests live in `tests/` (black-box, one package):
 - **api** — bucket/object ops, HeadBucket, NoSuchBucket errors, SigV4, ListObjectsV2 pagination
 - **multipart** — full create/upload/complete cycle, abort, list parts, list uploads, error paths
 - **raft** — single-node apply, snapshot/restore, join endpoint
-- **store** — bucket CRUD, object CRUD, prefix listing, pagination
+- **store** — bucket CRUD, object CRUD, versioning (multi-version, delete markers), prefix listing, pagination
 - **config** — defaults, file load, missing-file error

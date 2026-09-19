@@ -90,9 +90,11 @@ func ApplyOp(m *MetaStore, op RaftOp) error {
 		if err := json.Unmarshal(op.Meta, &meta); err != nil {
 			return err
 		}
-		return m.PutObject(op.Bucket, op.Key, meta)
+		_, err := m.PutObject(op.Bucket, op.Key, meta)
+		return err
 	case "delete_object":
-		return m.DeleteObject(op.Bucket, op.Key)
+		_, err := m.DeleteObject(op.Bucket, op.Key, "")
+		return err
 	default:
 		return nil
 	}
@@ -124,18 +126,18 @@ func (s *Store) ListBuckets() []Bucket {
 // --- Object operations ---
 
 // PutObject writes body as a blob, registers metadata via Raft.
-// Returns hex-encoded sha256 etag.
-func (s *Store) PutObject(bucket, key string, body io.Reader) (string, error) {
+// Returns hex-encoded sha256 etag and the new version ID.
+func (s *Store) PutObject(bucket, key string, body io.Reader) (string, string, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
-		return "", fmt.Errorf("read body: %w", err)
+		return "", "", fmt.Errorf("read body: %w", err)
 	}
 
 	sha := sha256.Sum256(data)
 	shaHex := hex.EncodeToString(sha[:])
 
 	if err := s.writeBlob(shaHex, data); err != nil {
-		return "", fmt.Errorf("write blob: %w", err)
+		return "", "", fmt.Errorf("write blob: %w", err)
 	}
 
 	meta := ObjectMeta{
@@ -147,17 +149,24 @@ func (s *Store) PutObject(bucket, key string, body io.Reader) (string, error) {
 	}
 	metaJSON, err := json.Marshal(meta)
 	if err != nil {
-		return "", fmt.Errorf("marshal meta: %w", err)
+		return "", "", fmt.Errorf("marshal meta: %w", err)
 	}
 	if err := s.raftApply(RaftOp{Kind: "put_object", Bucket: bucket, Key: key, Meta: metaJSON}); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return shaHex, nil
+	// Version ID is set by MetaStore.PutObject during ApplyOp.
+	// Read it back from the meta store.
+	m, _ := s.meta.GetObject(bucket, key, "")
+	if m != nil {
+		return shaHex, m.VersionID, nil
+	}
+	return shaHex, "", nil
 }
 
 // GetObject returns reader and metadata for key in bucket.
-func (s *Store) GetObject(bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
-	meta, err := s.meta.GetObject(bucket, key)
+// Pass versionID = "" for the latest version, or a specific version ID.
+func (s *Store) GetObject(bucket, key, versionID string) (io.ReadCloser, *ObjectMeta, error) {
+	meta, err := s.meta.GetObject(bucket, key, versionID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -168,23 +177,40 @@ func (s *Store) GetObject(bucket, key string) (io.ReadCloser, *ObjectMeta, error
 	return f, meta, nil
 }
 
-// DeleteObject removes object metadata (via Raft) and its blob.
-func (s *Store) DeleteObject(bucket, key string) error {
-	meta, err := s.meta.GetObject(bucket, key)
-	if err != nil {
-		return err
+// DeleteObject creates a delete marker for key (S3 versioning semantics).
+// If versionID is specified, that specific version is permanently removed.
+func (s *Store) DeleteObject(bucket, key, versionID string) (string, error) {
+	// If deleting a specific version, remove the blob too.
+	if versionID != "" {
+		meta, err := s.meta.GetObjectVersion(bucket, key, versionID)
+		if err != nil {
+			return "", err
+		}
+		if err := s.raftApply(RaftOp{Kind: "delete_object", Bucket: bucket, Key: key}); err != nil {
+			return "", err
+		}
+		if !meta.IsDeleteMarker {
+			os.Remove(s.blobPath(meta.Sha256))
+		}
+		return "", nil
 	}
-	if err := s.raftApply(RaftOp{Kind: "delete_object", Bucket: bucket, Key: key}); err != nil {
-		return err
-	}
-	// Blob deletion is idempotent — safe even if Raft round-trips.
-	os.Remove(s.blobPath(meta.Sha256))
-	return nil
+	// Create a delete marker (no blob to delete).
+	return s.meta.DeleteObject(bucket, key, "")
 }
 
 // GetMeta returns object metadata without opening the blob.
 func (s *Store) GetMeta(bucket, key string) (*ObjectMeta, error) {
-	return s.meta.GetObject(bucket, key)
+	return s.meta.GetObject(bucket, key, "")
+}
+
+// GetMetaVersion returns object metadata for a specific version.
+func (s *Store) GetMetaVersion(bucket, key, versionID string) (*ObjectMeta, error) {
+	return s.meta.GetObjectVersion(bucket, key, versionID)
+}
+
+// ListObjectVersions returns all versions for a bucket.
+func (s *Store) ListObjectVersions(bucket, prefix string) ([]ObjectVersion, []ObjectVersion) {
+	return s.meta.ListObjectVersions(bucket, prefix)
 }
 
 // ListObjectsPaged returns a paginated list of objects.

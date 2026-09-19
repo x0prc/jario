@@ -143,3 +143,35 @@ type listMultipartUploadEntry struct {
 	UploadID  string `xml:"UploadId"`
 	Initiated string `xml:"Initiated"`
 }
+
+// --- ListObjectVersions (GET /{bucket}?versions) ---
+
+type listVersionEntry struct {
+	Key          string `xml:"Key"`
+	VersionID    string `xml:"VersionId"`
+	IsLatest     bool   `xml:"IsLatest"`
+	LastModified string `xml:"LastModified"`
+	ETag         string `xml:"ETag"`
+	Size         int64  `xml:"Size"`
+	StorageClass string `xml:"StorageClass"`
+}
+
+type listDeleteMarkerEntry struct {
+	Key          string `xml:"Key"`
+	VersionID    string `xml:"VersionId"`
+	IsLatest     bool   `xml:"IsLatest"`
+	LastModified string `xml:"LastModified"`
+}
+
+type listObjectVersionsResult struct {
+	XMLName          xml.Name                 `xml:"ListVersionsResult"`
+	Xmlns            string                   `xml:"xmlns,attr"`
+	Name             string                   `xml:"Name"`
+	Prefix           string                   `xml:"Prefix"`
+	KeyMarker        string                   `xml:"KeyMarker,omitempty"`
+	VersionIdMarker  string                   `xml:"VersionIdMarker,omitempty"`
+	MaxKeys          int                      `xml:"MaxKeys"`
+	IsTruncated      bool                     `xml:"IsTruncated"`
+	Versions         []listVersionEntry       `xml:"Version"`
+	DeleteMarkers    []listDeleteMarkerEntry  `xml:"DeleteMarker"`
+}
