@@ -34,10 +34,11 @@ type Rafter interface {
 // RaftOp is the metadata mutation replicated through Raft.
 // (raft.Op is an alias of this type.)
 type RaftOp struct {
-	Kind   string          `json:"kind"`
-	Bucket string          `json:"bucket,omitempty"`
-	Key    string          `json:"key,omitempty"`
-	Meta   json.RawMessage `json:"meta,omitempty"`
+	Kind      string          `json:"kind"`
+	Bucket    string          `json:"bucket,omitempty"`
+	Key       string          `json:"key,omitempty"`
+	VersionID string          `json:"versionID,omitempty"`
+	Meta      json.RawMessage `json:"meta,omitempty"`
 }
 
 // Store is the storage engine. Owns blob dir and metadata index.
@@ -49,20 +50,27 @@ type Store struct {
 	region    string
 }
 
+// MaxObjectSize caps in-memory body reads to prevent OOM from malicious requests.
+const MaxObjectSize = 5 << 30 // 5 GiB (S3 limit)
+
 // New creates a Store rooted at dataDir with its own MetaStore.
-func New(dataDir string) *Store {
-	os.MkdirAll(filepath.Join(dataDir, "blobs"), 0755)
+func New(dataDir string) (*Store, error) {
+	if err := os.MkdirAll(filepath.Join(dataDir, "blobs"), 0755); err != nil {
+		return nil, fmt.Errorf("mkdir blobs: %w", err)
+	}
 	meta, err := NewMetaStore(dataDir)
 	if err != nil {
-		panic("store new: " + err.Error())
+		return nil, err
 	}
-	return &Store{dataDir: dataDir, meta: meta, multipart: newMultipartState()}
+	return &Store{dataDir: dataDir, meta: meta, multipart: newMultipartState()}, nil
 }
 
 // NewWithMeta creates a Store sharing the given MetaStore (for Raft wiring).
-func NewWithMeta(dataDir string, meta *MetaStore) *Store {
-	os.MkdirAll(filepath.Join(dataDir, "blobs"), 0755)
-	return &Store{dataDir: dataDir, meta: meta, multipart: newMultipartState()}
+func NewWithMeta(dataDir string, meta *MetaStore) (*Store, error) {
+	if err := os.MkdirAll(filepath.Join(dataDir, "blobs"), 0755); err != nil {
+		return nil, fmt.Errorf("mkdir blobs: %w", err)
+	}
+	return &Store{dataDir: dataDir, meta: meta, multipart: newMultipartState()}, nil
 }
 
 // SetRaft wires the store to a Raft node for metadata replication.
@@ -94,6 +102,9 @@ func ApplyOp(m *MetaStore, op RaftOp) error {
 		return err
 	case "delete_object":
 		_, err := m.DeleteObject(op.Bucket, op.Key, "")
+		return err
+	case "delete_version":
+		_, err := m.DeleteObject(op.Bucket, op.Key, op.VersionID)
 		return err
 	default:
 		return nil
@@ -128,7 +139,7 @@ func (s *Store) ListBuckets() []Bucket {
 // PutObject writes body as a blob, registers metadata via Raft.
 // Returns hex-encoded sha256 etag and the new version ID.
 func (s *Store) PutObject(bucket, key string, body io.Reader) (string, string, error) {
-	data, err := io.ReadAll(body)
+	data, err := io.ReadAll(io.LimitReader(body, MaxObjectSize))
 	if err != nil {
 		return "", "", fmt.Errorf("read body: %w", err)
 	}
@@ -180,13 +191,12 @@ func (s *Store) GetObject(bucket, key, versionID string) (io.ReadCloser, *Object
 // DeleteObject creates a delete marker for key (S3 versioning semantics).
 // If versionID is specified, that specific version is permanently removed.
 func (s *Store) DeleteObject(bucket, key, versionID string) (string, error) {
-	// If deleting a specific version, remove the blob too.
 	if versionID != "" {
 		meta, err := s.meta.GetObjectVersion(bucket, key, versionID)
 		if err != nil {
 			return "", err
 		}
-		if err := s.raftApply(RaftOp{Kind: "delete_object", Bucket: bucket, Key: key}); err != nil {
+		if err := s.raftApply(RaftOp{Kind: "delete_version", Bucket: bucket, Key: key, VersionID: versionID}); err != nil {
 			return "", err
 		}
 		if !meta.IsDeleteMarker {
@@ -194,7 +204,6 @@ func (s *Store) DeleteObject(bucket, key, versionID string) (string, error) {
 		}
 		return "", nil
 	}
-	// Create a delete marker (no blob to delete).
 	return s.meta.DeleteObject(bucket, key, "")
 }
 

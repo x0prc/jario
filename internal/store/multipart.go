@@ -32,6 +32,7 @@ type Part struct {
 	Size       int64
 	ETag       string
 	Sha256     string
+	CreatedAt  time.Time
 }
 
 // CompletedPart is the caller-supplied part清单 for CompleteMultipartUpload.
@@ -97,7 +98,7 @@ func (s *Store) UploadPart(bucket, key, uploadID string, partNumber int, body io
 	if err := s.validateUpload(bucket, key, uploadID); err != nil {
 		return "", err
 	}
-	data, err := io.ReadAll(body)
+	data, err := io.ReadAll(io.LimitReader(body, MaxObjectSize))
 	if err != nil {
 		return "", fmt.Errorf("read part: %w", err)
 	}
@@ -105,7 +106,9 @@ func (s *Store) UploadPart(bucket, key, uploadID string, partNumber int, body io
 	etag := hex.EncodeToString(sha[:])
 
 	dir := multipartDir(s.dataDir, uploadID)
-	os.MkdirAll(dir, 0755)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("mkdir parts: %w", err)
+	}
 	if err := os.WriteFile(partPath(s.dataDir, uploadID, partNumber), data, 0644); err != nil {
 		return "", fmt.Errorf("write part: %w", err)
 	}
@@ -114,11 +117,13 @@ func (s *Store) UploadPart(bucket, key, uploadID string, partNumber int, body io
 	u := s.multipart.uploads[uploadID]
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	now := time.Now()
 	u.parts[partNumber] = Part{
 		PartNumber: partNumber,
 		Size:       int64(len(data)),
 		ETag:       etag,
 		Sha256:     etag,
+		CreatedAt:  now,
 	}
 	return etag, nil
 }

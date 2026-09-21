@@ -21,7 +21,7 @@ import (
 
 func newAPIHandler(t *testing.T) (http.Handler, *store.Store) {
 	t.Helper()
-	st := store.New(t.TempDir())
+	st := mustNewStore(t)
 	return api.NewHandler(st, "testkey", "testsecret"), st
 }
 

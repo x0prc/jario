@@ -81,7 +81,10 @@ func main() {
 	meta.SetRegion(cfg.Region)
 
 	// Storage engine.
-	st := store.NewWithMeta(cfg.DataDir, meta)
+	st, err := store.NewWithMeta(cfg.DataDir, meta)
+	if err != nil {
+		log.Fatalf("storage engine: %v", err)
+	}
 
 	// Raft node — FSM applies mutations to the shared meta.
 	raftDir := cfg.DataDir + "/raft"

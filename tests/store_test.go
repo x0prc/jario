@@ -11,7 +11,7 @@ import (
 )
 
 func TestStoreCreateBucket(t *testing.T) {
-	s := store.New(t.TempDir())
+	s := mustNewStore(t)
 	err := s.CreateBucket("test-bucket")
 	if err != nil {
 		t.Fatalf("CreateBucket: %v", err)
@@ -23,7 +23,7 @@ func TestStoreCreateBucket(t *testing.T) {
 }
 
 func TestStoreCreateBucketDuplicate(t *testing.T) {
-	s := store.New(t.TempDir())
+	s := mustNewStore(t)
 	s.CreateBucket("test-bucket")
 	err := s.CreateBucket("test-bucket")
 	if !errors.Is(err, store.ErrBucketExists) {
@@ -32,7 +32,7 @@ func TestStoreCreateBucketDuplicate(t *testing.T) {
 }
 
 func TestStoreDeleteBucket(t *testing.T) {
-	s := store.New(t.TempDir())
+	s := mustNewStore(t)
 	s.CreateBucket("test-bucket")
 	if err := s.DeleteBucket("test-bucket"); err != nil {
 		t.Fatalf("DeleteBucket: %v", err)
@@ -43,7 +43,7 @@ func TestStoreDeleteBucket(t *testing.T) {
 }
 
 func TestStoreDeleteBucketNonexistent(t *testing.T) {
-	s := store.New(t.TempDir())
+	s := mustNewStore(t)
 	err := s.DeleteBucket("no-bucket")
 	if !errors.Is(err, store.ErrNoBucket) {
 		t.Fatalf("expected ErrNoBucket, got %v", err)
@@ -51,7 +51,7 @@ func TestStoreDeleteBucketNonexistent(t *testing.T) {
 }
 
 func TestStorePutGetObject(t *testing.T) {
-	s := store.New(t.TempDir())
+	s := mustNewStore(t)
 	s.CreateBucket("test-bucket")
 	etag, vid, err := s.PutObject("test-bucket", "hello.txt", strings.NewReader("hello world"))
 	if err != nil {
@@ -81,7 +81,7 @@ func TestStorePutGetObject(t *testing.T) {
 }
 
 func TestStorePutObjectNoBucket(t *testing.T) {
-	s := store.New(t.TempDir())
+	s := mustNewStore(t)
 	_, _, err := s.PutObject("no-bucket", "hello.txt", strings.NewReader("hello"))
 	if !errors.Is(err, store.ErrNoBucket) {
 		t.Fatalf("expected ErrNoBucket, got %v", err)
@@ -89,7 +89,7 @@ func TestStorePutObjectNoBucket(t *testing.T) {
 }
 
 func TestStoreGetObjectNonexistent(t *testing.T) {
-	s := store.New(t.TempDir())
+	s := mustNewStore(t)
 	s.CreateBucket("test-bucket")
 	_, _, err := s.GetObject("test-bucket", "no-key", "")
 	if !errors.Is(err, store.ErrNoKey) {
@@ -98,7 +98,7 @@ func TestStoreGetObjectNonexistent(t *testing.T) {
 }
 
 func TestStoreDeleteObject(t *testing.T) {
-	s := store.New(t.TempDir())
+	s := mustNewStore(t)
 	s.CreateBucket("test-bucket")
 	_, vid, _ := s.PutObject("test-bucket", "hello.txt", strings.NewReader("hello"))
 	// Delete with specific version to permanently remove the object.
@@ -113,7 +113,7 @@ func TestStoreDeleteObject(t *testing.T) {
 }
 
 func TestStoreDeleteObjectCreatesMarker(t *testing.T) {
-	s := store.New(t.TempDir())
+	s := mustNewStore(t)
 	s.CreateBucket("test-bucket")
 	s.PutObject("test-bucket", "hello.txt", strings.NewReader("hello"))
 	// DELETE without version ID creates a delete marker.
@@ -129,7 +129,7 @@ func TestStoreDeleteObjectCreatesMarker(t *testing.T) {
 }
 
 func TestStoreVersioningMultipleVersions(t *testing.T) {
-	s := store.New(t.TempDir())
+	s := mustNewStore(t)
 	s.CreateBucket("test-bucket")
 	_, v1, _ := s.PutObject("test-bucket", "doc.txt", strings.NewReader("v1"))
 	_, _, _ = s.PutObject("test-bucket", "doc.txt", strings.NewReader("v2"))
@@ -157,7 +157,7 @@ func TestStoreVersioningMultipleVersions(t *testing.T) {
 }
 
 func TestStoreListObjectsPaged(t *testing.T) {
-	s := store.New(t.TempDir())
+	s := mustNewStore(t)
 	s.CreateBucket("test-bucket")
 	s.PutObject("test-bucket", "b/1.txt", strings.NewReader("3"))
 	s.PutObject("test-bucket", "a/2.txt", strings.NewReader("2"))

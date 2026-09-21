@@ -233,7 +233,10 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 	if meta.VersionID != "" {
 		w.Header().Set("X-Amz-Version-Id", meta.VersionID)
 	}
-	io.Copy(w, rc)
+	_, err = io.Copy(w, rc)
+	if err != nil {
+		return // client disconnected or write error — nothing useful to do
+	}
 }
 
 func (h *Handler) headObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
@@ -364,7 +367,7 @@ func (h *Handler) completeMultipartUpload(w http.ResponseWriter, r *http.Request
 	}
 	writeXML(w, completeMultipartUploadResult{
 		Xmlns:   s3xmlns,
-		Location: "http://" + r.Host + "/" + bucket + "/" + key,
+		Location: r.URL.Scheme + "://" + r.Host + "/" + bucket + "/" + key,
 		Bucket:  bucket,
 		Key:     key,
 	})
@@ -381,7 +384,7 @@ func (h *Handler) listParts(w http.ResponseWriter, r *http.Request, bucket, key 
 	for _, p := range parts {
 		res.Parts = append(res.Parts, listPartsPartEntry{
 			PartNumber:   p.PartNumber,
-			LastModified: time.Now().Format(time.RFC3339),
+			LastModified: p.CreatedAt.Format(time.RFC3339),
 			ETag:         `"` + p.ETag + `"`,
 			Size:         p.Size,
 		})

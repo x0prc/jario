@@ -24,7 +24,7 @@ func (f *fakeJoiner) AddVoter(id, addr string) error {
 
 func newJoinHandler(t *testing.T, j api.Joiner) http.Handler {
 	t.Helper()
-	h := api.NewHandler(store.New(t.TempDir()), "testkey", "testsecret")
+	h := api.NewHandler(mustNewStore(t), "testkey", "testsecret")
 	h.(interface{ SetJoiner(api.Joiner) }).SetJoiner(j)
 	return h
 }
